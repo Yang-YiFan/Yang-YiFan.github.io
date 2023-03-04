@@ -12,7 +12,7 @@ You can access my curriculum vitae [here](misc/CV_Yifan_Yang.pdf).
 ### **ISOSceles: Accelerating Sparse CNNs through Inter-Layer Pipelining**
 <u>Yifan Yang</u>, Joel S. Emer, Daniel Sanchez  
 in Proceedings of the 29th international symposium on High Performance Computer Architecture (HPCA-29), 2023.  
-[[paper]](./papers/hpca23_isosceles.pdf)
+[[paper]](./papers/hpca23_isosceles.pdf) [[slides]](./slides/hpca23_isosceles_slides.pptx)
 
 ### **SpZip: Architectural Support for Effective Data Compression In Irregular Applications**
 <u>Yifan Yang</u>, Joel S. Emer, Daniel Sanchez  
