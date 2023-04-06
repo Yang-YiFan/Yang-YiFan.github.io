@@ -1,5 +1,5 @@
 I am a fourth year PhD student at MIT CSAIL advised by Professor [Daniel Sanchez](http://people.csail.mit.edu/sanchez/) and Professor [Joel Emer](https://people.csail.mit.edu/emer/).
-I work in computer architecture with a focus on accelerating irregular and sparse applications.
+I work in computer architecture with a focus on accelerating irregular and sparse applications such as sparse neural networks, sparse tensor algebra, and graph analytics.
 
 Before joining MIT, I received a bachelor's degree in Mathematics and Physics from Tsinghua University in 2019, where I worked with Professor [Leibo Liu](http://www.ime.tsinghua.edu.cn/info/1015/1023.htm).
 I did a summer internship at UC Berkeley working with Professor [Kurt Keutzer](https://people.eecs.berkeley.edu/~keutzer/).
@@ -12,12 +12,12 @@ You can access my curriculum vitae [here](misc/CV_Yifan_Yang.pdf).
 ### **ISOSceles: Accelerating Sparse CNNs through Inter-Layer Pipelining**
 <u>Yifan Yang</u>, Joel S. Emer, Daniel Sanchez  
 in Proceedings of the 29th international symposium on High Performance Computer Architecture (HPCA-29), 2023.  
-[[paper]](./papers/hpca23_isosceles.pdf) [[slides]](./slides/hpca23_isosceles_slides.pptx)
+[[paper]](./papers/hpca23_isosceles.pdf) [[slides]](./slides/hpca23_isosceles_slides.pptx) [[poster]](./slides/hpca23_isosceles_poster.pdf)
 
 ### **SpZip: Architectural Support for Effective Data Compression In Irregular Applications**
 <u>Yifan Yang</u>, Joel S. Emer, Daniel Sanchez  
 in Proceedings of the 48th annual International Symposium on Computer Architecture (ISCA-48), 2021.  
-[[paper]](./papers/isca21_spzip.pdf) [[slides]](./slides/isca21_spzip_slides.pptx) [[lightning]](./slides/isca21_spzip_lightning.pptx)
+[[paper]](./papers/isca21_spzip.pdf) [[slides]](./slides/isca21_spzip_slides.pptx) [[lightning]](./slides/isca21_spzip_lightning.pptx) [[poster]](./slides/isca21_spzip_poster.pdf)
 
 ### **GraphABCD: Scaling Out Graph Analytics with Asynchronous Block Coordinate Descent**
 <u>Yifan Yang</u>, Zhaoshi Li, Yangdong Deng, Zhiwei Liu, Shouyi Yin, Shaojun Wei, Leibo Liu  
