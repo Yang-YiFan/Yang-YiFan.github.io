@@ -1,5 +1,7 @@
-I am a fourth year PhD student at MIT CSAIL advised by Professor [Daniel Sanchez](http://people.csail.mit.edu/sanchez/) and Professor [Joel Emer](https://people.csail.mit.edu/emer/).
-I work in computer architecture with a focus on accelerating irregular and sparse applications such as sparse neural networks, sparse tensor algebra, and graph analytics.
+**I'm expected to graduate in May, 2024 and am looking for industry jobs.**
+
+I am a final year PhD student at MIT CSAIL advised by Professor [Daniel Sanchez](http://people.csail.mit.edu/sanchez/) and Professor [Joel Emer](https://people.csail.mit.edu/emer/).
+I work in computer architecture with a focus on accelerating irregular and sparse applications such as sparse neural networks (transformer, CNN, etc.), sparse tensor algebra, and graph analytics.
 
 Before joining MIT, I received a bachelor's degree in Mathematics and Physics from Tsinghua University in 2019, where I worked with Professor [Leibo Liu](http://www.ime.tsinghua.edu.cn/info/1015/1023.htm).
 I did a summer internship at UC Berkeley working with Professor [Kurt Keutzer](https://people.eecs.berkeley.edu/~keutzer/).
