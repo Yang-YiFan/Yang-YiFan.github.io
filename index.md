@@ -1,6 +1,6 @@
-**I'm expected to graduate in May, 2024 and am looking for industry jobs. Feel free to contact me if you are interested.**
+**I'm expected to graduate in May, 2024 and am looking for industry jobs in the United States. Feel free to contact me if you are interested.**
 
-I am a final year PhD student at MIT CSAIL advised by Professor [Daniel Sanchez](http://people.csail.mit.edu/sanchez/) and Professor [Joel Emer](https://people.csail.mit.edu/emer/).
+I am a fifth year PhD student at MIT CSAIL advised by Professor [Daniel Sanchez](http://people.csail.mit.edu/sanchez/) and Professor [Joel Emer](https://people.csail.mit.edu/emer/).
 I work in computer architecture with a focus on accelerating irregular and sparse applications such as sparse transformers (GPT, Bert, etc.), sparse CNNs, sparse tensor algebra, and graph analytics.
 
 Before joining MIT, I received a bachelor's degree in Mathematics and Physics from Tsinghua University in 2019, where I worked with Professor [Leibo Liu](http://www.ime.tsinghua.edu.cn/info/1015/1023.htm).
