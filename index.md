@@ -1,5 +1,3 @@
-**I'm expected to graduate in May, 2024 and am looking for industry jobs in the United States. Feel free to contact me if you are interested.**
-
 I am a fifth year PhD student at MIT CSAIL advised by Professor [Daniel Sanchez](http://people.csail.mit.edu/sanchez/) and Professor [Joel Emer](https://people.csail.mit.edu/emer/).
 I work in computer architecture with a focus on accelerating irregular and sparse applications such as sparse transformers (GPT, Bert, etc.), sparse CNNs, sparse tensor algebra, and graph analytics.
 
@@ -10,6 +8,10 @@ I also had industry internship at Apple.
 You can access my curriculum vitae [here](misc/CV_Yifan_Yang.pdf).
 
 # Publications
+
+### **Trapezoid: A Versatile Accelerator for Dense and Sparse Matrix Multiplications**
+<u>Yifan Yang</u>, Joel S. Emer, Daniel Sanchez  
+in Proceedings of the 51th annual International Symposium on Computer Architecture (ISCA-51), 2024.  
 
 ### **ISOSceles: Accelerating Sparse CNNs through Inter-Layer Pipelining**
 <u>Yifan Yang</u>, Joel S. Emer, Daniel Sanchez  
