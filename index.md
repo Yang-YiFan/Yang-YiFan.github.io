@@ -12,6 +12,7 @@ You can access my curriculum vitae [here](misc/CV_Yifan_Yang.pdf).
 ### **Trapezoid: A Versatile Accelerator for Dense and Sparse Matrix Multiplications**
 <u>Yifan Yang</u>, Joel S. Emer, Daniel Sanchez  
 in Proceedings of the 51th annual International Symposium on Computer Architecture (ISCA-51), 2024.  
+[[paper]](./papers/isca24_trapezoid.pdf)
 
 ### **ISOSceles: Accelerating Sparse CNNs through Inter-Layer Pipelining**
 <u>Yifan Yang</u>, Joel S. Emer, Daniel Sanchez  
