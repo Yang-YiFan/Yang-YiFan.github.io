@@ -1,5 +1,7 @@
-I am a fifth year PhD student at MIT CSAIL advised by Professor [Daniel Sanchez](http://people.csail.mit.edu/sanchez/) and Professor [Joel Emer](https://people.csail.mit.edu/emer/).
-I work in computer architecture with a focus on accelerating irregular and sparse applications such as sparse transformers (GPT, Bert, etc.), sparse CNNs, sparse tensor algebra, and graph analytics.
+I am a Deep Learning Architect at [NVIDIA](https://www.nvidia.com/en-us/), working on deep learning inference architecture.
+
+I graduated my Ph.D. in CS from MIT advised by Professor [Daniel Sanchez](http://people.csail.mit.edu/sanchez/) and Professor [Joel Emer](https://people.csail.mit.edu/emer/).
+My thesis work focuses on computer architecture, specifically on accelerating irregular and sparse applications such as sparse transformers (GPT, Bert, etc.), sparse CNNs, sparse tensor algebra, and graph analytics.
 
 Before joining MIT, I received a bachelor's degree in Mathematics and Physics from Tsinghua University in 2019, where I worked with Professor [Leibo Liu](http://www.ime.tsinghua.edu.cn/info/1015/1023.htm).
 I did a summer internship at UC Berkeley working with Professor [Kurt Keutzer](https://people.eecs.berkeley.edu/~keutzer/).
@@ -36,8 +38,14 @@ in Proceedings of the 2019 ACM/SIGDA International Symposium on Field-Programmab
 
 # Experience
 
+### June 2024 - Present: **Deep Learning Architect, NVIDIA**
+Deep learning inference architecture
+
 ### Summer 2022: **Platform Architecture Intern, Apple**
 CPU cache subsystem performance research
 
 ### Spring 2022: **Teaching Assistant, MIT**
 [6.812/6.825 Hardware Architecture for Deep Learning](http://csg.csail.mit.edu/6.825/index.html)
+
+### Summer 2018: **Research Intern, UC Berkeley**
+Algorithm-hardware co-design for ConvNet accelerators on embedded FPGAs
