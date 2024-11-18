@@ -11,7 +11,9 @@ You can access my curriculum vitae [here](misc/CV_Yifan_Yang.pdf).
 
 # Blogs
 
-I plan to write blogs during my process of learning CUDA/Cutlass/Cute/Triton programming. Stay tuned!
+I plan to write blogs during my process of learning CUDA/Cutlass/Cute/Triton programming. Stay tuned for more!
+
+- [Using TMA Load and Prefetch in Cute](./blogs/cute_tma.html)
 
 # Publications
 
