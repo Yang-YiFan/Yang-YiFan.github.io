@@ -6,7 +6,9 @@ layout: default
 
 The [Tensor Memory Accelerator (TMA)](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/) is a hardware unit introduced in the NVIDIA Hopper architecture to accelerate tensor data movement. To formally motivate TMA, we need to wind the clock back a bit to Volta.
 
-As the tensor core goes faster, it needs enough data to keep it busy. Using little's law: $throughput = \frac{buffer\_size}{latency}$, if we increase the (tensor core) throughput and keep the latency equal, we'd need more staging buffer capacity. In Volta, the RF is an extra staging buffer area when feeding the data to the tensor core, i.e. `DRAM->RF->shared memory->tensor core`. Increasing tensor core throughput adds significant RF usage. So Ampere introduces [asyn memory copy](https://developer.nvidia.com/blog/nvidia-ampere-architecture-in-depth/) to eliminate the extra staging buffer usage in RF, i.e. the new path being `DRAM->shared memory->tensor core`. 
+## Why TMA?
+
+As the tensor core goes faster, it needs enough data to keep it busy. Using little's law: `throughput = buffer_size/latency`, if we increase the (tensor core) throughput and keep the latency equal, we'd need more staging buffer capacity. In Volta, the RF is an extra staging buffer area when feeding the data to the tensor core, i.e. `DRAM->RF->shared memory->tensor core`. Increasing tensor core throughput adds significant RF usage. So Ampere introduces [asyn memory copy](https://developer.nvidia.com/blog/nvidia-ampere-architecture-in-depth/) to eliminate the extra staging buffer usage in RF, i.e. the new path being `DRAM->shared memory->tensor core`. 
 
 At this point, it seems like we solve the bandwidth and capacity issue in the memory subsystem. We can make the tensor core even faster. However, the *address generation* becomes the throughput bottleneck as the tensor core becomes faster. The life time of the tensor can be described in 3 stages: address generation, data movement, and computation. The throughput of all the stages need to roughly match, otherwise it becomes the bottleneck. After scaling the tensor core and memory bandwidth properly, the address generation becomes the throughput bottleneck. TMA offloads the address calculation from the CUDA cores so that its throughput can keep up with the tensor core and memory bandwidth.
 
@@ -73,5 +75,8 @@ void cute_host_load(T* data, int N, int K) {
                     <<<dim3{N / CTA_N, K / CTA_K, 1}, 32>>>
                     (tma_load, gmem_tensor, smem_layout);
 }
-
 ```
+
+
+References:
+- [CUTLASS Tutorial: Mastering the NVIDIA Tensor Memory Accelerator (TMA)](https://research.colfax-intl.com/tutorial-hopper-tma/)
