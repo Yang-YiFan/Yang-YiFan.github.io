@@ -10,6 +10,8 @@ Icons in author info section from https://fontawesome.com/v4.7/examples/
 
 Repo organized as https://github.com/academicpages/academicpages.github.io
 
+Latex support based on https://github.com/ryanmcdermott/jekyll-latex
+
 ## Repo Structure
 
 `_layouts` describes the (customized) layout of the HTML page  

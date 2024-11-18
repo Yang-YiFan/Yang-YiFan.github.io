@@ -8,13 +8,13 @@ The [Tensor Memory Accelerator (TMA)](https://developer.nvidia.com/blog/nvidia-h
 
 ## Why TMA?
 
-As the tensor core goes faster, it needs enough data to keep it busy. Using little's law: `throughput = buffer_size/latency`, if we increase the (tensor core) throughput and keep the latency equal, we'd need more staging buffer capacity. In Volta, the RF is an extra staging buffer area when feeding the data to the tensor core, i.e. `DRAM->RF->shared memory->tensor core`. Increasing tensor core throughput adds significant RF usage. So Ampere introduces [asyn memory copy](https://developer.nvidia.com/blog/nvidia-ampere-architecture-in-depth/) to eliminate the extra staging buffer usage in RF, i.e. the new path being `DRAM->shared memory->tensor core`. 
+As the tensor core goes faster, it needs enough data to keep it busy. Using little's law: $throughput = \frac{buffer\_size}{latency}$, if we increase the (tensor core) throughput and keep the latency equal, we'd need more staging buffer capacity. In Volta, the RF is an extra staging buffer area when feeding the data to the tensor core, i.e. `DRAM->RF->shared memory->tensor core`. Increasing tensor core throughput adds significant RF usage. So Ampere introduces [asyn memory copy](https://developer.nvidia.com/blog/nvidia-ampere-architecture-in-depth/) to eliminate the extra staging buffer usage in RF, i.e. the new path being `DRAM->shared memory->tensor core`.
 
 At this point, it seems like we solve the bandwidth and capacity issue in the memory subsystem. We can make the tensor core even faster. However, the *address generation* becomes the throughput bottleneck as the tensor core becomes faster. The life time of the tensor can be described in 3 stages: address generation, data movement, and computation. The throughput of all the stages need to roughly match, otherwise it becomes the bottleneck. After scaling the tensor core and memory bandwidth properly, the address generation becomes the throughput bottleneck. TMA offloads the address calculation from the CUDA cores so that its throughput can keep up with the tensor core and memory bandwidth.
 
 Using the TMA can be tricky, one can directly use the [CUDA APIs](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#tensor-memory-access) but it's low level and error-prone. [Cute](https://github.com/NVIDIA/cutlass/tree/main/media/docs/cute) fortunately offers a high-level abstraction to use TMA. In this blog, I will show how to load and prefetch a tensor using TMA in Cute.
 
-WIP $\LaTeX$
+WIP
 
 ```c++
 // assume load a [N, K] row major weight matrix
