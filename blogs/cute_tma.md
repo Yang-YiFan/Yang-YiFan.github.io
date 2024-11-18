@@ -1,5 +1,6 @@
 ---
 layout: default
+title: Using TMA Load and Prefetch in Cute
 ---
 
 # Using TMA Load and Prefetch in Cute
