@@ -14,7 +14,7 @@ At this point, it seems like we solve the bandwidth and capacity issue in the me
 
 Using the TMA can be tricky, one can directly use the [CUDA APIs](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#tensor-memory-access) but it's low level and error-prone. [Cute](https://github.com/NVIDIA/cutlass/tree/main/media/docs/cute) fortunately offers a high-level abstraction to use TMA. In this blog, I will show how to load and prefetch a tensor using TMA in Cute.
 
-WIP
+WIP $\LaTeX$
 
 ```c++
 // assume load a [N, K] row major weight matrix
