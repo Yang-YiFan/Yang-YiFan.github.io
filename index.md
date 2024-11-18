@@ -9,7 +9,16 @@ I also had industry internship at Apple.
 
 You can access my curriculum vitae [here](misc/CV_Yifan_Yang.pdf).
 
+# Blogs
+
+I plan to write blogs during my process of learning CUDA/Cutlass/Cute/Triton programming. Stay tuned!
+
 # Publications
+
+### **Azul: An Accelerator for Sparse Iterative Solvers Leveraging Distributed On-Chip Memory**
+Axel Feldmann, Courtney Golden, <u>Yifan Yang</u>, Joel S. Emer, Daniel Sanchez  
+in Proceedings of the 57th annual international symposium on Microarchitecture (MICRO-57), 2024.  
+[[paper]](./papers/micro24_azul.pdf)
 
 ### **Trapezoid: A Versatile Accelerator for Dense and Sparse Matrix Multiplications**
 <u>Yifan Yang</u>, Joel S. Emer, Daniel Sanchez  
@@ -49,3 +58,8 @@ CPU cache subsystem performance research
 
 ### Summer 2018: **Research Intern, UC Berkeley**
 Algorithm-hardware co-design for ConvNet accelerators on embedded FPGAs
+
+# Services
+
+- Selection Committee Member, MICRO 2024 Student Research Competition
+- Artifact Evaluation Committee Member, ASPLOS 2022, 2023
