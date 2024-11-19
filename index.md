@@ -9,11 +9,11 @@ I also had industry internship at Apple.
 
 You can access my curriculum vitae [here](misc/CV_Yifan_Yang.pdf).
 
-# Blogs
+# [Blogs](./blogs/blogs.html)
 
 I plan to write blogs during my process of learning CUDA/Cutlass/Cute/Triton programming. Stay tuned for more!
 
-- ### [Using TMA Load and Prefetch in Cute](./blogs/cute_tma.html)
+- ### [Using TMA Load and Prefetch in Cute](./blogs/cute_tma/cute_tma.html)
 
 # Publications
 
