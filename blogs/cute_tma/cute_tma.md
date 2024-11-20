@@ -8,7 +8,7 @@ The [Tensor Memory Accelerator (TMA)](https://developer.nvidia.com/blog/nvidia-h
 
 ## Why TMA?
 
-As the tensor core goes faster, it needs enough data to keep it busy. Using little's law: $throughput = \frac{buffer\_size}{latency}$, if we increase the (tensor core) throughput and keep the latency equal, we'd need more staging buffer capacity. 
+As the tensor core goes faster, it needs enough data to keep it busy. Using little's law: $\text{throughput} = \frac{\text{buffer\_size}}{\text{latency}}$, if we increase the (tensor core) throughput and keep the latency equal, we'd need more staging buffer capacity. 
 
 ![cp_async](./cp_async.png)
 
@@ -21,11 +21,13 @@ Using the TMA can be tricky, there are several options:
 2. [Triton](https://pytorch.org/blog/hopper-tma-unit/) adds experimental support for TMA but if you care about squeezing the last percentage of performance (I do :)), you might want to have finer grain control of the kernel.
 3. [Cute](https://github.com/NVIDIA/cutlass/tree/main/media/docs/cute) fortunately offers a high-level abstraction to use TMA with enough lower level control.  
 
-In this blog, I will show how to load and prefetch a tensor using TMA in Cute.
+In this blog, I will show how to load and prefetch a tensor using TMA in Cute. We leave the more advanced topics like store, multicast, reduction, and swizzle for future blogs.
 
 ## TMA Load
 
 WIP
+
+![grid](./grid.png)
 
 ### Host Code
 
@@ -54,6 +56,8 @@ void cute_host_load(T* data, int N, int K) {
 ```
 
 ### Device Code
+
+![crd](./crd.png)
 
 ```c++
 // assume load a [N, K] row major weight matrix
@@ -94,7 +98,20 @@ __global__ void cute_tma_load_kernel(__grid_constant__ const TmaLoad tma_load, G
 }
 ```
 
+### Harness code
 
-References:
+```c++
+
+```
+
+## TMA Prefetch
+
+WIP
+
+## Summary
+
+WIP
+
+## Additional references:
 - [CUTLASS Tutorial: Mastering the NVIDIA Tensor Memory Accelerator (TMA)](https://research.colfax-intl.com/tutorial-hopper-tma/)
 - [Nvidia A100 GPU hot chips 2020](https://hc32.hotchips.org/assets/program/conference/day1/HotChips2020_GPU_NVIDIA_Choquette_v01.pdf)
