@@ -101,7 +101,29 @@ __global__ void cute_tma_load_kernel(__grid_constant__ const TmaLoad tma_load, G
 ### Harness code
 
 ```c++
+static constexpr int PF_TILE_N = 64;
+static constexpr int PF_TILE_K = 128;
 
+int main() {
+    // Define problem size and tensors
+    int N = 256;
+    int K = 256;
+
+    // we assume this is a [N, K] row major matrix
+    cutlass::HostTensor<cutlass::float_e4m3_t, cutlass::layout::RowMajor> B({N, K});
+
+    // init some value on host for B tensor
+    // ...
+
+    B.sync_device();
+
+    // do TMA load to smem
+    cute_host_load<cutlass::float_e4m3_t, PF_TILE_N, PF_TILE_K>(B.device_data(), N, K);
+
+    cudaDeviceSynchronize();
+
+    return 0;
+}
 ```
 
 ## TMA Prefetch
@@ -110,7 +132,8 @@ WIP
 
 ## Summary
 
-WIP
+- WIP
+- All the code can be found [here](./code/)
 
 ## Additional references:
 - [CUTLASS Tutorial: Mastering the NVIDIA Tensor Memory Accelerator (TMA)](https://research.colfax-intl.com/tutorial-hopper-tma/)
