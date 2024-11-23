@@ -1,28 +1,16 @@
 #include "cuda_runtime.h"
 #include "cuda_profiler_api.h"
 
-#include <cassert>
-#include <cstddef>
 #include <cstdio>
-#include <iostream>
-#include <ostream>
-#include <vector>
-#include <string>
-#include <utility>
-#include <algorithm>
 
 #include <cutlass/cutlass.h>
 #include <cutlass/numeric_types.h>
-
 #include <cute/tensor.hpp>
 #include <cutlass/tensor_ref.h>
-
 #include <cutlass/layout/matrix.h>
 #include <cutlass/util/host_tensor.h>
-
 #include <cutlass/trace.h>
-
-#include "cute/util/print.hpp"
+#include <cute/util/print.hpp>
 
 #define gpuErrChk(ans) { gpuAssert2((ans), __FILE__, __LINE__); }
 inline void gpuAssert2(cudaError_t code, const char *file, int line, bool abort=true) {

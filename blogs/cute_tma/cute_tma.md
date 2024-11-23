@@ -130,10 +130,65 @@ int main() {
 
 WIP
 
+### Host code
+
+```c++
+template <typename T, int CTA_N, int CTA_K>
+void cute_host_prefetch(T* data, int N, int K) {
+    using namespace cute;
+
+    // create the GMEM tensor, row major
+    auto gmem_layout = make_layout(make_shape(N, K), make_stride(K, 1));
+    auto gmem_tensor = make_tensor(make_gmem_ptr(data), gmem_layout);
+
+    // create the SMEM layout, row major
+    // smem_layout need to use static integer
+    // use dynamic integer will cause compilation error
+    auto smem_layout = make_layout(make_shape(Int<CTA_N>{}, Int<CTA_K>{}), make_stride(Int<CTA_K>{}, _1{}));
+
+    // create the TMA object
+    auto tma_load = make_tma_copy(SM90_TMA_LOAD{}, gmem_tensor, smem_layout);
+
+    // invoke the kernel
+    cute_tma_prefetch_kernel<T, CTA_N, CTA_K>
+                    <<<dim3{N / CTA_N, K / CTA_K, 1}, 32>>>
+                    (tma_load, gmem_tensor, smem_layout);
+}
+```
+
+You can see the host side code is exactly the same as TMA load (other than function names)! This is the power of the Cute abstraction. The tensor layout obviously is the same. Even the TMA object is the same. We specify whether we want to do load or prefetch on the device side, the TMA object will get dispatched into corresponding TMA atom. 
+
+### Device code
+
+```c++
+// assume load a [N, K] row major weight matrix
+template <typename T, int CTA_N, int CTA_K, class TmaLoad, class GmemTensor, class SmemLayout>
+__global__ void cute_tma_prefetch_kernel(__grid_constant__ const TmaLoad tma_load, GmemTensor gmem_tensor, SmemLayout smem_layout) {
+    using namespace cute;
+
+    if (threadIdx.x == 0) {
+        auto gmem_tensor_coord = tma_load.get_tma_tensor(shape(gmem_tensor));
+
+        auto gmem_tensor_coord_cta = local_tile(
+            gmem_tensor_coord,
+            Tile<Int<CTA_N>, Int<CTA_K>>{},
+            make_coord(blockIdx.x, blockIdx.y));
+
+        auto tma_load_per_cta = tma_load.get_slice(0);
+        prefetch(tma_load,
+                 tma_load_per_cta.partition_S(gmem_tensor_coord_cta));
+    }
+    __syncthreads();
+
+    // after this line, the TMA prefetch is finished
+}
+```
+
 ## Summary
 
+- TMA offloads address generation from the CUDA core, freeing up resources for other computation (e.g. epilog).
 - WIP
-- All the code can be found [here](./code/)
+- All the code can be found [here](https://github.com/Yang-YiFan/Yang-YiFan.github.io/tree/main/blogs/cute_tma/code)
 
 ## Additional references:
 - [CUTLASS Tutorial: Mastering the NVIDIA Tensor Memory Accelerator (TMA)](https://research.colfax-intl.com/tutorial-hopper-tma/)
