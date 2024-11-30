@@ -4,6 +4,8 @@ layout: default
 
 # Using TMA Load and Prefetch in Cute
 
+All the code in this blog can be found [here](https://github.com/Yang-YiFan/Yang-YiFan.github.io/tree/main/blogs/cute_tma/code).
+
 The [Tensor Memory Accelerator (TMA)](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/) is a hardware unit introduced in the NVIDIA Hopper architecture to accelerate tensor data movement. To formally motivate TMA, we need to wind the clock back a bit to Volta.
 
 ## Why TMA?
@@ -16,44 +18,60 @@ The figure above shows the sequence of operation when feeding the data to the te
 
 At this point, it seems like we solve the bandwidth and capacity issue in the memory subsystem. We can make the tensor core go even faster. However, the throughput of other stages need to keep up with the tensor core. At a high level, the computation of a typical gemm kernel can roughly be described as `address generation->load->tensor core (MMA)->epilog (e.g. ReLU, softmax)->address generation->store`. Now let's try to make the kernel run faster. We bump up the tensor core throughput, the MMA stage becomes faster. We bump up the memory bandwidth along with the async memory copy optimization, the load/store stage becomes faster. The throughput of all the stages need to match. Therefore, we need to bump up the throughput of the *address generation* and *epilog* stage. Notice that these two stages both use the *CUDA core* and its throughput stays largely the same. Then we hit a problem, the throughput of the CUDA cores limits the overall throughput of the kernel. This is where TMA comes in. TMA offloads the address generation from the CUDA core. It by itself can generate addresses at a high throughput, matching the throughput of the rest of the stages. With this offloading, the entire CUDA core can be dedicated to the epilog stage, achieving higher throughput of the epilog stage. With the introduction of the TMA, now every stage of the gemm kernel can run at a high throughput.
 
+## What are the ways to use TMA?
+
 Using the TMA can be tricky, there are several options:
 1. one can directly use the [CUDA APIs](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#tensor-memory-access) but it's low level and error-prone. 
 2. [Triton](https://pytorch.org/blog/hopper-tma-unit/) adds experimental support for TMA but if you care about squeezing the last percentage of performance (I do :)), you might want to have finer grain control of the kernel.
 3. [Cute](https://github.com/NVIDIA/cutlass/tree/main/media/docs/cute) fortunately offers a high-level abstraction to use TMA with enough lower level control.  
 
-In this blog, I will show how to load and prefetch a tensor using TMA in Cute. We leave the more advanced topics like store, multicast, reduction, and swizzle for future blogs.
+In this blog, I will show how to load and prefetch a tensor using TMA in Cute. Some basic understanding of Cute is required. We leave the more advanced topics like store, multicast, reduction, and swizzle for future blogs.
 
 ## TMA Load
 
-WIP
+### Walkthrough Example
+
+We will walk through an example on how to use TMA to load a matrix (2d tensor) from global memory (gmem) to shared memory (smem). The figure below shows the shape and layout of the matrix `gmem_tensor`. It's `[N, K]` (`[6, 8] in the example`) and `rowMajor`. A common thing one would want to do is for one CTA (aka threadblock) to load a tile of the matrix. In out example, we want to tile the `gmem_tensor` into tiles of shape `[CTA_N, CTA_K]` (`[2, 4]`) and `rowMajor`. And each CTA loads a tile into smem. Then we need `[N/CTA_N, K/CTA_K]=[gridDim.x, gridDim.y]` (`[6/2, 8/4]=[3,2]`) CTA to achieve this. 
+
+In the example figure below, we have CTA at `(1,1)` in the grid to load the blue tile in `gmem_tensor` to smem.
+
+You can totally imagine the tile to CTA mapping to be different for different applications/implementations. For example, CTA0 loads tile `(0, 0), (2, 1)`, CTA1 loads tile `(0, 1), (2, 0)`, CTA2 loads tile `(1, 0), (1, 1)`. Here we just showcase one example mapping and it's straightforward to modify the code for other mappings.
 
 ![grid](./grid.png)
 
 ### Host Code
+
+Now we have all the information we need to construct the host side code.
 
 ```c++
 template <typename T, int CTA_N, int CTA_K>
 void cute_host_load(T* data, int N, int K) {
     using namespace cute;
 
-    // create the GMEM tensor, row major
+    // 1. create the gmem tensor, row major
     auto gmem_layout = make_layout(make_shape(N, K), make_stride(K, 1));
     auto gmem_tensor = make_tensor(make_gmem_ptr(data), gmem_layout);
 
-    // create the SMEM layout, row major
+    // 2. create the smem layout, row major
     // smem_layout need to use static integer
     // use dynamic integer will cause compilation error
     auto smem_layout = make_layout(make_shape(Int<CTA_N>{}, Int<CTA_K>{}), make_stride(Int<CTA_K>{}, _1{}));
 
-    // create the TMA object
+    // 3. create the TMA object
     auto tma_load = make_tma_copy(SM90_TMA_LOAD{}, gmem_tensor, smem_layout);
 
-    // invoke the kernel
+    // 4. invoke the kernel
     cute_tma_load_kernel<T, CTA_N, CTA_K>
                     <<<dim3{N / CTA_N, K / CTA_K, 1}, 32>>>
                     (tma_load, gmem_tensor, smem_layout);
 }
 ```
+
+Let's break it down:
+1. We first create the `gmem_tensor` with shape `[N, K]` and stride `[K, 1]` (i.e. `rowMajor`).
+2. Then we create the `smem_layout` with shape `[CTA_N, CTA_K]` and stride `[CTA_K, 1]` (i.e. `rowMajor`). The only thing to note here is the smem related object should use static integer like `cute::_1{}`) to avoid compilation error.
+3. Using the `gmem_tensor` pointer and layout along with the `smem_layout`, we create a TMA object using [make_tma_copy](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/atom/copy_traits_sm90_tma.hpp#L1290). Underneath, it creates the TMA descriptor (which the user can also use lower level [CUDA APIs](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#tensor-memory-access) to create). The type of TMA operation (e.g. load/store/prefetch) is specified by the CopyOp [SM90_TMA_LOAD](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/copy_sm90_tma.hpp#L277). The name is pretty straightforward, it's a load that uses TMA on SM90 (i.e. hopper).
+4. Finally, we invoke the kernel by passing the various object we initialized in the host function to the kernel. We also specifies the `gridDim` (`dim3{N / CTA_N, K / CTA_K, 1}`) and `blockDim` (`32` since TMA only needs 1 thread to drive).
 
 ### Device Code
 
@@ -66,71 +84,104 @@ __global__ void cute_tma_load_kernel(__grid_constant__ const TmaLoad tma_load, G
     using namespace cute;
     constexpr int tma_transaction_bytes = CTA_N * CTA_K * sizeof(T);
 
+    // 1. allocate smem for the tile and memory barrier
     __shared__ T smem_data[CTA_N * CTA_K];
     __shared__ uint64_t tma_load_mbar;
 
-    auto smem_tensor = make_tensor(make_smem_ptr(smem_data), smem_layout);
+    // 2. create the smem tensor
+    auto smem_tensor = make_tensor(make_smem_ptr(smem_data), smem_layout); // [CTA_N, CTA_K]
 
+    // 3. only need 1 thread to drive TMA
     if (threadIdx.x == 0) {
-        auto gmem_tensor_coord = tma_load.get_tma_tensor(shape(gmem_tensor));
-
+        // 4. initialize the barrier
         initialize_barrier(tma_load_mbar, /* arrival count */ 1);
+        set_barrier_transaction_bytes(tma_load_mbar, tma_transaction_bytes);
 
-        auto gmem_tensor_coord_cta = local_tile(
+        // 5. gets the coordinate of the smem tile in gmem tensor
+        auto gmem_tensor_coord = tma_load.get_tma_tensor(shape(gmem_tensor));
+        auto gmem_tensor_coord_cta = local_tile( // [CTA_N, CTA_K]
             gmem_tensor_coord,
             Tile<Int<CTA_N>, Int<CTA_K>>{},
             make_coord(blockIdx.x, blockIdx.y));
 
-        set_barrier_transaction_bytes(tma_load_mbar, tma_transaction_bytes);
-
+        // 6. get the slice of TMA work assigned to this CTA in a threadblock cluster 
         auto tma_load_per_cta = tma_load.get_slice(0);
+        // 7. issue TMA load
         copy(tma_load.with(tma_load_mbar),
-            tma_load_per_cta.partition_S(gmem_tensor_coord_cta),
-            tma_load_per_cta.partition_D(smem_tensor));
+            tma_load_per_cta.partition_S(gmem_tensor_coord_cta), // [[TMA_N, TMA_K], CTA_N/TMA_N, CTA_K/TMA_K]
+            tma_load_per_cta.partition_D(smem_tensor)); // [[TMA_N, TMA_K], CTA_N/TMA_N, CTA_K/
     }
+    // 8. wait for TMA to finish
     __syncthreads();
     wait_barrier(tma_load_mbar, /* phase */ 0);
 
-    // after this line, the TMA load is finished
+    // 9. after this line, the TMA load is finished
     if (threadIdx.x == 0) {
         printf("block: (%d, %d), value: %f, %f\n", blockIdx.x, blockIdx.y, float(smem_tensor(make_coord(0, 0))), float(smem_tensor(make_coord(0, 1))));
     }
 }
 ```
 
-### Harness code
+Note that the `tma_load` needs to be `__grid_constant__` since the TMA descriptor is created on the host and pass to the device. It can't be modified on device.
+
+Let's break the code down with the help of the figure above:
+1. We first allocate the smem space for the tile to be loaded (`smem_data`) and the [mbarrier](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier) `tma_load_mbar`.
+2. Then we create the `smem_tensor` using the smem pointer and layout.
+3. Only 1 thread is needed to drive the TMA load.
+4. Here we initialize the barrier. Because the TMA is an async unit, the CTA needs a way to get notified when the data transfer is done. We do this through [mbarrier](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier) (refer to the PTX doc to learn more about mbarrier). We first call [initialize_barrier()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/copy_sm90_desc.hpp#L64) with expected arrive count 1. Because we will have 1 thread (e.g. the same thread) to arrive on the barrier and set the barrier transaction count for the TMA in [set_barrier_transaction_bytes()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/copy_sm90_desc.hpp#L78).
+5. Now we obtain the `gmem_tensor_coord` through [get_tma_tensor()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/atom/copy_traits_sm90_tma.hpp#L153). This will give us a tensor with the same layout as `gmem_tensor`. But each entry, instead of the value, is the *coordinate* in the tensor as shown in the figure above. Then [local_tile()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/tensor_impl.hpp#L1016) tiles `gmem_tensor_coord` and returns us a tile `gmem_tensor_coord_cta` (e.g. blue tile) that the CTA wants to load from. The second argument specifies the tile size (i.e. `[CTA_N, CTA_K]`) we want to tile the big tensor with. The third argument specifies which tile we want to get. It does that by passing the coordinate (`[blockIdx.x, blockIdx.y]`) of the tile in the tile space to `local_tile()`. The numpy way to write it would be `gmem_tensor_coord[CTA_N * blockIdx.x : CTA_N * (blockIdx.x + 1), CTA_K * blockIdx.y : CTA_K * (blockIdx.y + 1)]`. To be more concrete, to get the blue tile in the figure, we do `local_tile(gmem_tensor_coord, Tile<Int<2>, Int<4>>{}, make_coord(1, 1))`. We tile `gmem_tensor_coord` by `[2, 4]` tile size and wants to get the tile at coordinate `(1, 1)`. 
+6. Now we get a slice of the TMA object ([get_slice](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/atom/copy_atom.hpp#L322)) that is assigned to this CTA. This is only relevant if you are in a threadblock cluster and the TMA object is responsible for the load of entire cluster (with multicasting). Here we only have 1 CTA for the TMA and no threadblock cluster so there is just 1 slice. This is similar to how you get a thread slice of MMA from a tiled MMA (and set the fragment etc.). Here we are getting a CTA slice of the TMA from a "tiled" TMA in a threadblock cluster.
+7. The [copy()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/algorithm/copy.hpp#L240) function issues the TMA load. It is one of the [Cute built-in algorithms](https://github.com/NVIDIA/cutlass/blob/main/media/docs/cute/04_algorithms.md) that operates on tensors (other examples are MMA and prefetch). We will have a detailed discussion of how this works in the section below.
+8. Now that we issued the TMA load, we will wait for it to finish. To do this, we first `__syncthreads();` so that every thread arrives at the wait point. Then all the threads [wait_barrier()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/copy_sm90_desc.hpp#L92) on the `tma_load_mbar`. The wait is completed when the [phase](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-phase) of the barrier flips. The initial phase is 0 during [initialization](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-init). The second argument of `wait_barrier()` is the current phase bit the barrier waiting to flip. We are waiting for phase 0 to flip, hence 0 is passed in. The TMA unit would decrement the transaction count of the barrier once the loads come back until it reaches 0, meaning all load finishes. Then the barrier flips, all threads' wait is done. We resume execution.
+9. At this point, the TMA load is done and load result is in smem and fully visible to all threads. Here we simply print some elements out.
+
+#### The Copy Function
+
+WIP
+
+### Harness Code
 
 ```c++
-static constexpr int PF_TILE_N = 64;
-static constexpr int PF_TILE_K = 128;
+// 1. Define TMA load tile size
+static constexpr int TILE_N = 64;
+static constexpr int TILE_K = 128;
 
 int main() {
-    // Define problem size and tensors
+    // 2. Define problem size and tensors
     int N = 256;
     int K = 256;
 
     // we assume this is a [N, K] row major matrix
     cutlass::HostTensor<cutlass::float_e4m3_t, cutlass::layout::RowMajor> B({N, K});
 
-    // init some value on host for B tensor
+    // 3. init some value on host for B tensor and copy it to GPU memory
     // ...
 
     B.sync_device();
 
-    // do TMA load to smem
-    cute_host_load<cutlass::float_e4m3_t, PF_TILE_N, PF_TILE_K>(B.device_data(), N, K);
+    // 4. do TMA load to smem
+    cute_host_load<cutlass::float_e4m3_t, TILE_N, TILE_K>(B.device_data(), N, K);
 
+    // 5. wait for kernel to complete
     cudaDeviceSynchronize();
 
     return 0;
 }
 ```
 
+The harness function is pretty straightforward:
+1. We first define the tile size (i.e. `CTA_N` and `CTA_K`) we want for each CTA's TMA load
+2. Then we define the `gmem_tensor` layout. Here we use the slightly older [HostTensor](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/tools/util/include/cutlass/util/host_tensor.h#L65) API ([tutorial here](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/examples/01_cutlass_utilities/cutlass_utilities.cu)) to define a FP8 (e4m3) row major matrix with shape `[N, K]`.
+3. We do some initialization of the tensor on the host. Then we use the HostTensor utility [sync_device()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/tools/util/include/cutlass/util/host_tensor.h#L403) to copy the initialized tensor from host to device.
+4. Now we call the TMA host function `cute_host_load` to launch the kernel.
+5. Finally we use `cudaDeviceSynchronize()` to wait for the kernel to complete.
+
+
 ## TMA Prefetch
 
 WIP
 
-### Host code
+### Host Code
 
 ```c++
 template <typename T, int CTA_N, int CTA_K>
@@ -158,7 +209,7 @@ void cute_host_prefetch(T* data, int N, int K) {
 
 You can see the host side code is exactly the same as TMA load (other than function names)! This is the power of the Cute abstraction. The tensor layout obviously is the same. Even the TMA object is the same. We specify whether we want to do load or prefetch on the device side, the TMA object will get dispatched into corresponding TMA atom. 
 
-### Device code
+### Device Code
 
 ```c++
 // assume load a [N, K] row major weight matrix
@@ -188,7 +239,7 @@ __global__ void cute_tma_prefetch_kernel(__grid_constant__ const TmaLoad tma_loa
 
 - TMA offloads address generation from the CUDA core, freeing up resources for other computation (e.g. epilog).
 - WIP
-- All the code can be found [here](https://github.com/Yang-YiFan/Yang-YiFan.github.io/tree/main/blogs/cute_tma/code)
+- All the code in this blog can be found [here](https://github.com/Yang-YiFan/Yang-YiFan.github.io/tree/main/blogs/cute_tma/code).
 
 ## Additional references:
 - [CUTLASS Tutorial: Mastering the NVIDIA Tensor Memory Accelerator (TMA)](https://research.colfax-intl.com/tutorial-hopper-tma/)
