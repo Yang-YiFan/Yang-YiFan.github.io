@@ -312,7 +312,7 @@ When defining the `CopyOp` (e.g. [SM90_TMA_LOAD_2D](https://github.com/NVIDIA/cu
 
 We still use the [above](#31-walkthrough-example) example. But instead of a single CTA loads a tile of `gmem_tensor`, we have an entire threadblock cluster (that contains multiple CTAs) loads the same tile of data. This means each CTA in the threadblock cluster will get a *copy* of the data tile in smem. We only load the data tile once from gmem/L2, and the tile got multicasted to all CTAs in the cluster from the L2. Multicasting saves L2 bandwidth and energy.
 
-The figure above shows this new scenario. We have a Grid of `[3, 4]` CTA and a `clusterDim` of `[1, 2]`. Notice the only difference is in the `Grid` part, we have 4 CTAs of the same cluster (in blue) trying to load the *same* blue tile into their own smem.
+The figure above shows this new scenario. We have a grid of `[3, 4]` CTA and a `clusterDim` of `[1, 2]`. Therefore, the grid contains `[3, 2]` clusters. We have 2 CTAs of the same cluster (in blue) trying to load the *same* blue tile into their own smem.
 
 ### 5.2 Host Code
 
