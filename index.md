@@ -13,7 +13,7 @@ You can access my curriculum vitae [here](misc/CV_Yifan_Yang.pdf).
 
 I plan to write blogs during my process of learning CUDA/Cutlass/Cute/Triton programming. Stay tuned for more!
 
-- ### [Using TMA Load and Prefetch in Cute](./blogs/cute_tma/cute_tma.html)
+- ### [Using TMA Load, Prefetch, and Multicast Load in Cute](./blogs/cute_tma/cute_tma.html)
 
 # Publications
 
