@@ -50,8 +50,19 @@ __global__ void cute_tma_load_kernel(__grid_constant__ const TmaLoad tma_load, G
         auto tma_load_per_cta = tma_load.get_slice(0);
         // 7. issue TMA load
         copy(tma_load.with(tma_load_mbar),
-            tma_load_per_cta.partition_S(gmem_tensor_coord_cta), // [[TMA_N, TMA_K], CTA_N/TMA_N, CTA_K/TMA_K]
-            tma_load_per_cta.partition_D(smem_tensor)); // [[TMA_N, TMA_K], CTA_N/TMA_N, CTA_K/
+            tma_load_per_cta.partition_S(gmem_tensor_coord_cta), // [[ATOM_N, ATOM_K], CTA_N/ATOM_N, CTA_K/ATOM_K]
+            tma_load_per_cta.partition_D(smem_tensor)); // [[ATOM_N, ATOM_K], CTA_N/ATOM_N, CTA_K/ATOM_K]
+
+        if ((blockIdx.x == 0) && (blockIdx.y == 0)) {
+            print(tma_load);
+            printf("\n");
+            print(tma_load_per_cta);
+            printf("\n");
+            print(tma_load_per_cta.partition_S(gmem_tensor_coord_cta));
+            printf("\n");
+            print(tma_load_per_cta.partition_D(smem_tensor));
+            printf("\n");
+        }
     }
     // 8. wait for TMA to finish
     __syncthreads();
