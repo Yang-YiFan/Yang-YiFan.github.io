@@ -169,7 +169,7 @@ As we presented above, the [copy()](https://github.com/NVIDIA/cutlass/blob/b0e09
 4. [copy_unpack()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/atom/copy_traits_sm90_tma.hpp#L68) unpacks the `Copy_Traits` and pass some additional traits into the copy function.
 5. [CallCOPY()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/util.hpp#L154) calls the actual `CopyOp::copy` using [explode()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/util.hpp#L181) for passing in additional arguments.
 6. [SM90_TMA_LOAD::copy()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/copy_sm90_tma.hpp#L287) function of CopyOp [SM90_TMA_LOAD](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/copy_sm90_tma.hpp#L277C8-L277C21) is called because we are copying a 2D tensor and provides 2 coordinates, which are the coordinates of the top left corner of the blue tile in `gmem_tensor` coordinate space, `[2, 4]` in the figure.
-7. [SM90_TMA_LOAD_2D::copy()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/copy_sm90_tma.hpp#L96), finally the 2D variants of the [TMA PTX instruction](https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cp-async-bulk-tensor) is called.
+7. [SM90_TMA_LOAD_2D::copy()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/copy_sm90_tma.hpp#L96), finally the 2D variants of the [TMA Load PTX instruction](https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cp-async-bulk-tensor) is called.
 
 #### How Are All the Arguments Passed to the PTX Instruction?
 
@@ -230,26 +230,26 @@ template <typename T, int CTA_N, int CTA_K>
 void cute_host_prefetch(T* data, int N, int K) {
     using namespace cute;
 
-    // create the GMEM tensor, row major
+    // 1. create the gmem tensor, row major
     auto gmem_layout = make_layout(make_shape(N, K), make_stride(K, 1));
     auto gmem_tensor = make_tensor(make_gmem_ptr(data), gmem_layout);
 
-    // create the SMEM layout, row major
+    // 2. create the smem layout, row major
     // smem_layout need to use static integer
     // use dynamic integer will cause compilation error
     auto smem_layout = make_layout(make_shape(Int<CTA_N>{}, Int<CTA_K>{}), make_stride(Int<CTA_K>{}, _1{}));
 
-    // create the TMA object
+    // 3. create the TMA object
     auto tma_load = make_tma_copy(SM90_TMA_LOAD{}, gmem_tensor, smem_layout);
 
-    // invoke the kernel
+    // 4. invoke the kernel
     cute_tma_prefetch_kernel<T, CTA_N, CTA_K>
                     <<<dim3{N / CTA_N, K / CTA_K, 1}, 32>>>
                     (tma_load, gmem_tensor, smem_layout);
 }
 ```
 
-You can see the host side code is exactly the same as [TMA load](#host-code) (other than function names)! This is the power of the Cute abstraction. The tensor layout obviously is the same. Even the TMA object is constructed the same. We specify whether we want to do load or prefetch on the device side, the TMA object will get dispatched into corresponding TMA atom. 
+You can see the host side code is exactly the same as [TMA load](#host-code) (other than function names)! This is the power of the Cute abstraction. The tensor layout obviously is the same. Even the TMA `Copy_Atom` is constructed the same. We specify whether we want to do load or prefetch on the device side, the TMA `Copy_Atom` will get dispatched into corresponding PTX instruction for load or prefetch. 
 
 ### Device Code
 
@@ -259,25 +259,51 @@ template <typename T, int CTA_N, int CTA_K, class TmaLoad, class GmemTensor, cla
 __global__ void cute_tma_prefetch_kernel(__grid_constant__ const TmaLoad tma_load, GmemTensor gmem_tensor, SmemLayout smem_layout) {
     using namespace cute;
 
+    // 1. only need 1 thread to drive TMA
     if (threadIdx.x == 0) {
+        // 2. gets the coordinate of the smem tile in gmem tensor
         auto gmem_tensor_coord = tma_load.get_tma_tensor(shape(gmem_tensor));
-
         auto gmem_tensor_coord_cta = local_tile(
             gmem_tensor_coord,
             Tile<Int<CTA_N>, Int<CTA_K>>{},
             make_coord(blockIdx.x, blockIdx.y));
 
+        // 3. get the slice of TMA work assigned to this CTA in a threadblock cluster 
         auto tma_load_per_cta = tma_load.get_slice(0);
+        // 4. issue TMA load
         prefetch(tma_load,
-                 tma_load_per_cta.partition_S(gmem_tensor_coord_cta));
+                 tma_load_per_cta.partition_S(gmem_tensor_coord_cta)); // [[ATOM_N, ATOM_K], CTA_N/ATOM_N, CTA_K/ATOM_K]
     }
+    // 5. no need to wait for prefetch, just make sure all threads converge
     __syncthreads();
 
-    // after this line, the TMA prefetch is finished
+    // 6. after this line, the TMA prefetch is finished
 }
 ```
 
-WIP
+The code is a subset of the TMA load code, here we only highlight the difference:
+1. We don't need any `smem_tensor` because we only prefetch to L2, no smem is involved. 
+2. We don't need any `mbarrier`. There isn't hardware support for prefetch arrival signaling to CTA according to the [PTX doc](https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cp-async-bulk-prefetch-tensor). Prefetch is non blocking and runs behind the scene for most applications, so there is no need to synchronize the prefetch arrival with the CTA. Then when the prefetch is done, we simply `__syncthreads();` to eliminate thread divergence.
+3. Instead of `copy()` function, we substitute it with the [prefetch()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/algorithm/prefetch.hpp#L97) function (another [Cute built-in algorithms](https://github.com/NVIDIA/cutlass/blob/main/media/docs/cute/04_algorithms.md)) to issue TMA prefetch. We still need to reshape the `gmem_tensor_coord_cta` into `[[ATOM_N, ATOM_K], CTA_N/ATOM_N, CTA_K/ATOM_K]` shape, but there is no need for a smem tensor reshape.
+
+### The Life of the Prefetch Function
+
+The underlying mechanism to support prefetching in Cute is quite similar to TMA load and they share most of the infrastructure.
+
+#### `Copy_Atom` Construction
+
+When defining the `CopyOp` (e.g. [SM90_TMA_LOAD_2D](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/copy_sm90_tma.hpp#L93C8-L93C24)), Cute defines a variant called [PREFETCH](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/copy_sm90_tma.hpp#L117). The rest of the `Copy_Traits`, `Copy_Atom`, `TiledCopy` definition are unchanged. We always define the same load `CopyOp` to `SM90_TMA_LOAD_2D` in the host code. Cute just substitute the `CopyOp` from `SM90_TMA_LOAD_2D` to `SM90_TMA_LOAD_2D::PREFETCH` underneath if we want to use prefetch.
+
+#### Dispatch Sequence of the Copy Function
+
+1. [prefetch()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/algorithm/prefetch.hpp#L97) does the `CopyOp` substitution. If the `CopyOp` [has a prefetch variant](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/algorithm/prefetch.hpp#L100), we substitute it to the prefetch variant and call `copy()` to start reusing the same infra.
+2. [copy()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/algorithm/copy.hpp#L240) same as TMA load.
+3. [copy_if()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/algorithm/copy.hpp#L158) same as TMA load.
+4. [copy_atom.call()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/atom/copy_atom.hpp#L94) same as TMA load.
+5. [copy_unpack()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/atom/copy_traits_sm90_tma.hpp#L68) does a similar unpack to TMA load. But it [throws away](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/atom/copy_traits_sm90_tma.hpp#L74) the `dst` tensor pointer since it's not needed in prefetch.
+6. [CallCOPY()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/util.hpp#L154) same as TMA load.
+7. [SM90_TMA_LOAD::PREFETCH::copy()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/copy_sm90_tma.hpp#L324) uses the `PREFETCH` variant of the copy function.
+8. [SM90_TMA_LOAD_2D::PREFETCH::copy()](https://github.com/NVIDIA/cutlass/blob/b0e09d7cd371eded41f7c1e057caf1593c27ba55/include/cute/arch/copy_sm90_tma.hpp#L120), uses the `PREFETCH` variant of the copy function and lowers to the 2D variants of the [TMA Prefetch PTX instruction](https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cp-async-bulk-prefetch-tensor) is called.
 
 ## Summary
 

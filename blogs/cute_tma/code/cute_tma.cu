@@ -101,40 +101,44 @@ template <typename T, int CTA_N, int CTA_K, class TmaLoad, class GmemTensor, cla
 __global__ void cute_tma_prefetch_kernel(__grid_constant__ const TmaLoad tma_load, GmemTensor gmem_tensor, SmemLayout smem_layout) {
     using namespace cute;
 
+    // 1. only need 1 thread to drive TMA
     if (threadIdx.x == 0) {
+        // 2. gets the coordinate of the smem tile in gmem tensor
         auto gmem_tensor_coord = tma_load.get_tma_tensor(shape(gmem_tensor));
-
         auto gmem_tensor_coord_cta = local_tile(
             gmem_tensor_coord,
             Tile<Int<CTA_N>, Int<CTA_K>>{},
             make_coord(blockIdx.x, blockIdx.y));
 
+        // 3. get the slice of TMA work assigned to this CTA in a threadblock cluster 
         auto tma_load_per_cta = tma_load.get_slice(0);
+        // 4. issue TMA load
         prefetch(tma_load,
-                 tma_load_per_cta.partition_S(gmem_tensor_coord_cta));
+                 tma_load_per_cta.partition_S(gmem_tensor_coord_cta)); // [[ATOM_N, ATOM_K], CTA_N/ATOM_N, CTA_K/ATOM_K]
     }
+    // 5. no need to wait for prefetch, just make sure all threads converge
     __syncthreads();
 
-    // after this line, the TMA prefetch is finished
+    // 6. after this line, the TMA prefetch is finished
 }
 
 template <typename T, int CTA_N, int CTA_K>
 void cute_host_prefetch(T* data, int N, int K) {
     using namespace cute;
 
-    // create the GMEM tensor, row major
+    // 1. create the gmem tensor, row major
     auto gmem_layout = make_layout(make_shape(N, K), make_stride(K, 1));
     auto gmem_tensor = make_tensor(make_gmem_ptr(data), gmem_layout);
 
-    // create the SMEM layout, row major
+    // 2. create the smem layout, row major
     // smem_layout need to use static integer
     // use dynamic integer will cause compilation error
     auto smem_layout = make_layout(make_shape(Int<CTA_N>{}, Int<CTA_K>{}), make_stride(Int<CTA_K>{}, _1{}));
 
-    // create the TMA object
+    // 3. create the TMA object
     auto tma_load = make_tma_copy(SM90_TMA_LOAD{}, gmem_tensor, smem_layout);
 
-    // invoke the kernel
+    // 4. invoke the kernel
     cute_tma_prefetch_kernel<T, CTA_N, CTA_K>
                     <<<dim3{N / CTA_N, K / CTA_K, 1}, 32>>>
                     (tma_load, gmem_tensor, smem_layout);
