@@ -130,7 +130,7 @@ __global__ void cute_tma_multicast_kernel(__grid_constant__ const TmaLoad tma_lo
         // 6. gets the coordinate of the smem tile in gmem tensor
         auto gmem_tensor_coord = tma_load.get_tma_tensor(shape(gmem_tensor));
         dim3 clusterIdx = cluster_id_in_grid();
-        auto gmem_tensor_coord_cta = local_tile( // [CTA_N, CTA_K]
+        auto gmem_tensor_coord_cluster = local_tile( // [CTA_N, CTA_K]
             gmem_tensor_coord,
             Tile<Int<CTA_N>, Int<CTA_K>>{},
             make_coord(clusterIdx.x, clusterIdx.y));
@@ -145,7 +145,7 @@ __global__ void cute_tma_multicast_kernel(__grid_constant__ const TmaLoad tma_lo
         auto tma_load_per_cta = tma_load.get_slice(_block_rank_in_cluster);
         // 9. issue TMA multicast
         copy(tma_load.with(tma_load_mbar, tma_mcast_mask),
-            tma_load_per_cta.partition_S(gmem_tensor_coord_cta), // [[ATOM_N, ATOM_K], CTA_N/ATOM_N, CTA_K/ATOM_K]
+            tma_load_per_cta.partition_S(gmem_tensor_coord_cluster), // [[ATOM_N, ATOM_K], CTA_N/ATOM_N, CTA_K/ATOM_K]
             tma_load_per_cta.partition_D(smem_tensor)); // [[ATOM_N, ATOM_K], CTA_N/ATOM_N, CTA_K/ATOM_K]
 
         /*if ((blockIdx.x == 0) && (blockIdx.y == 0)) {
@@ -171,8 +171,6 @@ __global__ void cute_tma_multicast_kernel(__grid_constant__ const TmaLoad tma_lo
         assert((float(smem_tensor(make_coord(0, 0))) - float(clusterIdx.x + clusterIdx.y)) < 1e-5);
         assert((float(smem_tensor(make_coord(0, 1))) - float(clusterIdx.x - clusterIdx.y)) < 1e-5);
     }
-
-    cluster_sync();
 }
 
 template <typename T, int CTA_N, int CTA_K, int CLUSTER_N, int CLUSTER_K>
