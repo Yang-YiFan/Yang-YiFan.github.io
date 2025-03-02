@@ -18,7 +18,7 @@ layout: default
 ## 2. 系统假设和简化
 
 这是这篇文章最重要的部分，只要你理解了我做了什么假设和简化，实际计算就很简单：
-- Disaggregation：即做prefill和decode用单独的GPU系统。这简化了我们的估算，我们只需要考虑decode阶段就可以，可以忽略prefill阶段的干扰。
+- Disaggregation：即做prefill和decode用单独的GPU系统。这简化了我们的估算，我们**只需要考虑decode阶段就可以**，可以忽略prefill阶段的干扰。
 - 极致的专家并行 (EP) (比如EP 320) 加attention数据并行(DP): 这是DeepSeek的部署方案 (根据[DeepSeek V3的文章](https://arxiv.org/pdf/2412.19437)和[他们的推理系统文章](https://github.com/deepseek-ai/open-infra-index/blob/main/202502OpenSourceWeek/day_6_one_more_thing_deepseekV3R1_inference_system_overview.md)), 通过极致的专家并行，每个GPU的HBM大部分存储了Multi-head Latent Attention (MLA)的KV cache，权重部分很小。在decode的1个iteration中，每个GPU会加载`所有用户的KV cache`，`MLA权重`，`1个专家（expert）权重`。后两个部分很小，所以我们可以**近似认为decode阶段大部分时间都在加载KV cache**。如果假设在Mixture of Experts (MOE)或MLA中存在Tensor Parallel (TP)会改变我们的估算，为了简化，我们忽略TP。
 - 没有HBM容量限制: 这意味着我们的HBM无限大，可以存储任意数量的KV cache (batch size)，使得MOE不会变成memory bound。这是前一个假设的副产品。**足够的batch size**意味着我们的MOE阶段不会memory bound，并且与KV cache加载时间相比，这部分数据搬运时间可以忽略不计。
 - 在大batch size下MLA是memory bound: 因为MLA压缩KV cache会带来更多计算，所以这部分我不太确定。我采用了和Lyken一样的假设，如果有问题欢迎大家提建议。如果这个假设没问题，这意味着我们可以**近似认为decode的执行时间就是从HBM加载所有用户的KV cache到GPU的时间**。
@@ -90,4 +90,4 @@ DeepSeek V3/R1的每个用户KV cache大小为$(d_c + d_h^r) * seq\_len * num\_l
 - 不同的并行策略之间有明显的性能差异。最公平的比较应该在相同的并行策略下进行。
 - 我们已经算出了throughput数字，我们把成本估算留作课后作业。
 
-我可能有一些计算/假设是有错误的，所以你发现任何错误或有任何建议改进估算的方法，请在评论区指教。
+我可能有一些计算/假设是有错误的，所以各位大神发现任何错误或有任何建议改进估算的方法，请多多指教。
