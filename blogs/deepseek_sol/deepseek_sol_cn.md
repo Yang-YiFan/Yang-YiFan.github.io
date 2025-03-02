@@ -45,11 +45,13 @@ DeepSeek V3/R1的每个用户KV cache大小为$(d_c + d_h^r) * seq\_len * num\_l
 - 使用FP8来存储KV cache，这可以提高SOL throughput两倍.
 - 在decode阶段使用MTP (Multi-Token Prediction)，这意味着每次KV cache加载，我们可以生成超过1个token。假设Acceptance Rate (AR)为N，那么SOL throughput可以乘以N.
 
+<!--
 那我们现在来看看B200的数字:
 - 8TB/s HBM带宽
 - 180GB HBM容量
 
 按照同样的计算，B200的SOL throughput是`8TB/s * 1s / 334MB = 23952k tps/GPU`。
+-->
 
 ## 4. 为什么尤老师的估算不准确?
 
@@ -75,7 +77,9 @@ DeepSeek V3/R1的每个用户KV cache大小为$(d_c + d_h^r) * seq\_len * num\_l
 
 所以每秒每个GPU可以加载所有的权重和KV cache `4.8TB/s * 1s / 141 GB = 34`次。这意味着可以服务`(141GB - 76.5GB) / 334MB = 193`个用户。所以每秒每个GPU可以生成`34 * 193 = 6562`个token，只有H800 (极致EP)的60%的吞吐量！如果考虑MLA权重，这个数字甚至会更低。即使使用更强大的GPU，如果你的并行策略不好，你也不能达到和弱一点的GPU一样的吞吐量。
 
+<!--
 这也解释了为什么直接比较[Nvidia TensorRT-LLM的数字](https://github.com/NVIDIA/TensorRT-LLM/blob/main/docs/source/media/r1-perf.jpeg)和DeepSeek的数字是不完全公平的。TensorRT-LLM的数字是在8个H200上测到的，就会遇到我们上面讲的HBM容量的问题。（而且TensorRT-LLM还有很多优化还没有上线）
+-->
 
 ### 4.2 TP MOE效率不高
 

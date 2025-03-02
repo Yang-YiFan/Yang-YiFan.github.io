@@ -45,11 +45,13 @@ Note note that further optimizations could raise the SOL throughput even higher:
 - Use FP8 for KV cache, this can raise the SOL throughput by 2x.
 - Use MTP (Multi-Token Prediction) for decoding, this means that each iteration loading of the KV cache, we can generate more than 1 token. Assuming an Acceptance Rate (AR) of N, then the SOL throughput can be multiplied by N.
 
+<!--
 For a bonus, let's plug in the B200 numbers:
 - 8TB/s HBM bandwidth
 - 180GB HBM capacity
 
 Following the same calculation, the B200 SOL throughput is `8TB/s * 1s / 334MB = 23952k tps/GPU`.
+-->
 
 ## 4. Why is Professor You's estimate off?
 
@@ -75,7 +77,9 @@ Plugging in some numbers:
 
 So in 1 second, each GPU can load (all the weights + KV cache) `4.8TB/s * 1s / 141 GB = 34` times. That's for `(141GB - 76.5GB) / 334MB = 193` users worth of KV cache. So in 1 second, each GPU can generate `34 * 193 = 6562` tokens, only 60% of the H800 (extreme EP) SOL throughput! This number could be even lower if you consider the MLA weights. Even with a more powerful GPU, if your parallelization strategy is not good, you can't achieve the same throughput as a wimpier GPU.
 
+<!--
 This is also why comparing the [Nvidia TensorRT-LLM numbers](https://github.com/NVIDIA/TensorRT-LLM/blob/main/docs/source/media/r1-perf.jpeg) directly with DeepSeek's number is not a fair game. The TensorRT-LLM numbers are obtained on 8xH200 which will face the exact same capacity issue as we explained above. (Let alone the fact that there are many optimizations Nvidia engineers are working hard on getting it implemented :))
+-->
 
 ### 4.2 TP MOE is inefficient
 
