@@ -39,7 +39,7 @@ The KV cache size per user for DeepSeek V3/R1 is $(d_c + d_h^r) * seq\_len * num
 
 Each token generation is associated with 1 KV cache load. So in 1 second, each GPU can load `3.35TB/s * 1s / 334MB = 10030` tokens. So the speed-of-light (SOL) throughput is `10030 tps/GPU`, >5x of the measured number.
 
-Note that this SOL throughput bound is not achievable in practice because I made too many idealized assumptions above (especially the sufficient network bandwidth assumption). It is possible to tighten it with more realistic assumptions.
+Note that this SOL throughput bound is not achievable in practice because I made too many idealized assumptions above (especially the sufficient network bandwidth assumption). It is possible to tighten it with more realistic assumptions. To give another example, if MLA is compute bound, then the per-iteration runtime is longer than just loading the KV cache from off-chip, so the SOL throughput will be lower.
 
 Note note that further optimizations could raise the SOL throughput even higher:
 - Use FP8 for KV cache, this can raise the SOL throughput by 2x.

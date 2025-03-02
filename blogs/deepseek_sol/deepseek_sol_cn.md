@@ -39,7 +39,7 @@ DeepSeek V3/R1的每个用户KV cache大小为$(d_c + d_h^r) * seq\_len * num\_l
 
 生成每个token需要1次KV cache从片下加载到片上。所以每秒每个GPU可以加载`3.35TB/s * 1s / 334MB = 10030` tokens。所以speed-of-light (SOL) throughput是`10030 tps/GPU`，是DeepSeek测到的数字的5倍多.
 
-注意到这个SOL throughput上限是达不到的，因为我在上面做了很多理想化的假设（特别是足够网络带宽的假设）。我们可以通过更现实的假设来收紧这个上限。
+注意到这个SOL throughput上限是达不到的，因为我在上面做了很多理想化的假设（特别是足够网络带宽的假设）。我们可以通过更现实的假设来收紧这个上限。再举个例子的话，如果MLA是compute bound，那么每个iteration的运行时间会比从加载KV cache的时间要长，所以能达到的SOL throughput会更低。
 
 其次进一步的优化可以继续提高SOL throughput:
 - 使用FP8来存储KV cache，这可以提高SOL throughput两倍.
