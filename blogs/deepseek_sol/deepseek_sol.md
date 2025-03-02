@@ -19,7 +19,7 @@ This blog is heavily inspired by [Lyken](https://lzhu.me/)'s estimate and my cal
 
 This is the most important part of the blog, the actual calculation is easy as long as you understand the assumptions and simplifications well:
 - Disaggregation: i.e. having dedicated pools of GPUs for prefill and decode separately. This simplifies estimation by **focusing our estimation purely on decode phase**.
-- Extreme EP (e.g. EP 320) with DP attention: this is what DeepSeek is using in practice (according to [DeepSeek V3 paper](https://arxiv.org/pdf/2412.19437) and [their serving system blog](https://github.com/deepseek-ai/open-infra-index/blob/main/202502OpenSourceWeek/day_6_one_more_thing_deepseekV3R1_inference_system_overview.md)), by doing extreme EP, the HBM of each GPU is mostly storing KV cache of MLA, the weight portion is tiny. During 1 iteration of decode, each GPU is loading `KV cache for all user`, `MLA weights`, `1 expert weight`. The portion of the latter two is tiny so we could **approximate the majority of the decode work is loading KV cache**. If we assume there is TP in MOE or MLA, that will change the calculation, for simplicity let's ignore TP.
+- Extreme Expert Parallel (EP) (e.g. EP 320) with Data Parallel (DP) attention: this is what DeepSeek is using in practice (according to [DeepSeek V3 paper](https://arxiv.org/pdf/2412.19437) and [their serving system blog](https://github.com/deepseek-ai/open-infra-index/blob/main/202502OpenSourceWeek/day_6_one_more_thing_deepseekV3R1_inference_system_overview.md)), by doing extreme EP, the HBM of each GPU is mostly storing KV cache of Multi-head Latent Attention (MLA), the weight portion is tiny. During 1 iteration of decode, each GPU is loading `KV cache for all user`, `MLA weights`, `1 expert weight`. The portion of the latter two is tiny so we could **approximate the majority of the decode work is loading KV cache**. If we assume there is Tensor Parallel (TP) in Mixture of Experts (MOE) or MLA, that will change the calculation, for simplicity let's ignore TP.
 - Not HBM capacity limited: this means out HBM is big enough to store however many KV cache (batch size) we want in order to make MOE not memory bound. This is sort of a by-product of the previous assumption. **Enough batch size** means our MOE stage is not memory bound and is a tiny portion compared to the KV cache loading time.
 - MLA with high batch size is memory bound: this is the part I'm least sure about since MLA compresses KV cache at the cost of more compute. I'll go with the same assumption as Lyken and update it later if I'm wrong. If this is true, this means we can **approximate the decode execution time as the time to load KV cache of all users from HBM to on-chip**.
 - **NVLink/InfiniBand is not a bottleneck**: according to [this estimate](https://zhuanlan.zhihu.com/p/27292649125?utm_psn=1879469993151944398) the network bandwidth actually limits the throughput. For simplicity, let's assume we have enough network bandwidth (especially with Blackwell NVL72).
@@ -44,6 +44,12 @@ Note that this SOL throughput bound is not achievable in practice because I made
 Note note that further optimizations could raise the SOL throughput even higher:
 - Use FP8 for KV cache, this can raise the SOL throughput by 2x.
 - Use MTP (Multi-Token Prediction) for decoding, this means that each iteration loading of the KV cache, we can generate more than 1 token. Assuming an Acceptance Rate (AR) of N, then the SOL throughput can be multiplied by N.
+
+For a bonus, let's plug in the B200 numbers:
+- 8TB/s HBM bandwidth
+- 180GB HBM capacity
+
+Following the same calculation, the B200 SOL throughput is `8TB/s * 1s / 334MB = 23952k tps/GPU`.
 
 ## 4. Why is Professor You's estimate off?
 
