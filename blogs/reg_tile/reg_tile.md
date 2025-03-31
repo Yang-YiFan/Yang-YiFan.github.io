@@ -2,7 +2,7 @@
 layout: default
 ---
 
-# How to Make a Compute-bound Problem Actually Compute-bound (WIP)
+# How to Make a Compute-bound Problem Actually Compute-bound
 
 *Disclaimer: The content of this blog reflects my personal experiences and opinions while learning GPU programming in my own time. All information presented is publicly available and does not represent the views or positions of NVIDIA Corporation or any of its affiliates.*
 
@@ -47,7 +47,9 @@ As you might notice, both optimizations has something to do with *tiling*, but o
 
 First, let's define the gemm problem and some terminologies. We have two matrices `A` and `B`, and we want to compute the product `C = A * B`. The matrices are of size `[M, K]` and `[K, N]`, and we want to compute the product C of size `[M, N]`. For simplicity, we use `M=N=K=4096` as an example problem size in this blog.
 
-Because the GPU has many SMs (Streaming Multiprocessor), we need to somehow parallelize the gemm problem across all SMs. The way we parallel is part of the `dataflow` (or compute schedule, [ref1](https://people.csail.mit.edu/emer/media/papers/2016.06.isca.eyeriss_architecture.pdf), [ref2](https://csg.csail.mit.edu/6.5930/Lectures/L11.pdf), [ref3](https://yang-yifan.github.io/papers/isca24_trapezoid.pdf)). The most common dataflow people use in mapping gemm to SMs is called `output-stationary (OS) dataflow` (or inner-product (IP) dataflow). This means each SM is responsible for producing a disjoint tile of the output matrix. The tile of output is *stationary* in the SM. Output gets maximum reuse in SM.
+Because the GPU has many SMs (Streaming Multiprocessor), we need to somehow parallelize the gemm problem across all SMs. The way we parallel is part of the `dataflow` (or compute schedule, [ref1](https://people.csail.mit.edu/emer/media/papers/2016.06.isca.eyeriss_architecture.pdf), [ref2](https://csg.csail.mit.edu/6.5930/Lectures/L11.pdf), [ref3](https://yang-yifan.github.io/papers/isca24_trapezoid.pdf)). The most common dataflow people use in mapping gemm to SMs is called `output-stationary (OS) dataflow` (or inner-product (IP) dataflow). The figure below shows the OS dataflow and the work of 1 SM. This means each SM is responsible for producing a disjoint tile of the output matrix (`C(0,0)`). The tile of output is *stationary* in the SM. Output gets maximum reuse in SM. The highlighted SM is responsible for doing `[BLOCK_M, K] (A0) x [K, BLOCK_N] (B0) -> [BLOCK_M, BLOCK_N] (C(0,0))`.
+
+![OS_dataflow_SM](./OS_dataflow_SM.png)
 
 The reason why people tend to use OS dataflow is because inter-SM communication is expensive. Suppose we don't use OS dataflow, meaning that multiple SMs are collaboratively producing 1 output tile. They have to communicate and synchronize through global memory (cached in L2) which is extremely slow. So using OS dataflow to avoid expensive inter-SM communication is a common practice. 
 
@@ -116,7 +118,7 @@ The shared memory (smem) tiling tries to achieve bandwidth amplification at the 
 
 Plugging in the real A100 numbers, we want the amplified bandwidth to be 512 B/cycle, and currently the `DRAM->smem` bandwidth is 13.3 B/cycle. So smem tiling should give us at least an amplification factor of $\frac{512}{13.3}=39$. This means, on average, each input element in smem should be reused at least 39 times. If we achieve this reuse factor of 39, then smem can give the CUDA core (and the whole pipeline) an illusion that it can supply 512 B/cycle from DRAM directly.
 
-Now I'll explain how to tile the gemm such that each input element is reused 39 times. Again, we assume we use `output-stationary (OS) dataflow`. The figure below shows the computation performed by each threadblock (SM) in the kernel.
+Now I'll explain how to tile the gemm such that each input element is reused 39 times. Again, we assume we use `output-stationary (OS) dataflow`. The figure below shows the computation performed by 1 threadblock (SM) in the kernel.
 
 ![OS_dataflow_SM](./OS_dataflow_SM.png)
 
@@ -222,11 +224,11 @@ Importantly, for multicasting to work, you need multiple SMs to request the same
 
 ![threadblock_rasterization](./threadblock_rasterization.png)
 
-Above we show three different rasterization orders with a 4x4 threadblock gemm and 4 SMs. Assume `BLOCK_M=BLOCK_N=32`. The left is a naive rasterization order where we execute the threadblocks in a row-wise order. As you can see, the amount of unique input data requested all 4 SMs in this row-wise order is `4 * BLOCK_M * K + 1 * K * BLOCK_N = 160 * K`. And the total amount of input data requested is `4 * (BLOCK_M * K + K * BLOCK_N) = 256 * K`. With this rasterization order, we have a multicasting factor of `256 / 160 = 1.6`.
+Above we show three different rasterization orders with a 4x4 threadblock gemm and 4 SMs. The same color denotes the same wave of computation. The overall computation is 4 waves. Assume `BLOCK_M=BLOCK_N=32`. The left is a naive rasterization order where we execute the threadblocks in a row-wise order. As you can see, the amount of unique input data requested all 4 SMs in this row-wise order is `4 * BLOCK_M * K + 1 * K * BLOCK_N = 160 * K`. And the total amount of input data requested is `4 * (BLOCK_M * K + K * BLOCK_N) = 256 * K`. With this rasterization order, we have a multicasting factor of `256 / 160 = 1.6`.
 
 The middle is the rasterization we used in the [above example](#52-multicasting) to leverage multicasting. The amount of unique input data requested all 4 SMs in this rasterization order is `2 * BLOCK_M * K + 2 * K * BLOCK_N = 128 * K`. And the total amount of input data requested is `2 * (BLOCK_M * K + K * BLOCK_N) = 256 * K`. With this rasterization order, we have a multicasting factor of `256 / 128 = 2`, better than the 1.6 of the row-wise order!
 
-The right is a intentionally constructed bad rasterization order that will have no multicasting. As you can see, there is no input data sharing between the 4 SMs. So the multicasting factor is 1.
+The right is a intentionally constructed bad rasterization order that will have no multicasting. As you can see, there is no input data sharing (poor locality) between the 4 SMs. So the multicasting factor is 1. But funnily enough this is the exact pattern we need for smem swizzling to avoid bank conflict. We'll explore that on another day.
 
 So by changing the rasterization order, we can improve the multicasting factor. This is often done in software by the user. Two examples would be the [cutlass gemm rasterization](https://github.com/NVIDIA/cutlass/blob/62750a2b75c802660e4894434dc55e839f322277/include/cutlass/gemm/kernel/sm90_tile_scheduler.hpp#L105) and the [triton gemm rasterization](https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html#compute-kernel) (referred as L2 cache optimization in the tutorial).
 
@@ -235,29 +237,37 @@ So by changing the rasterization order, we can improve the multicasting factor. 
 As you might have imagined, multicasting requires some hardware support. There are at least 3 kinds of multicasting in Nvidia GPUs (Hopper+) across the memory hierarchy:
 - **[Threadblock Cluster](https://docs.nvidia.com/cuda/cuda-c-programming-guide/#thread-block-clusters)**: The user specifies which set of threadblocks to form a cluster (e.g. `2x2` in the example above). And the hardware will take care of the multicasting within the cluster.
 - **[L2 Request Coalescer (LRC)](https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#metrics-decoder)**: The user doesn't specify which set of threadblocks group together. The hardware will opportunistically find the duplicated input requests and group them together for multicasting.
-- **smem**: Within a warp, with no bank conflict, each cycle all 32 threads can read 128B data from smem. If each thread reads more than 4B (e.g. 8B using `LDS.64` and 16B using `LDS.128`) and all 32 threads read data from some overlapped address range, there is some multicasting happening from smem to the 32 threads, so that the effective smem bandwidth is higher than the 128B/cycle smem BW. Refer to my friend [Axel's blog](https://feldmann.nyc/blog/smem-microbenchmarks) for more details.
+- **smem**: Within a warp, with no bank conflict, each cycle all 32 threads can read 128B data from smem. If each thread reads more than 4B (e.g. 8B using `LDS.64` and 16B using `LDS.128`) and all 32 threads read data from some overlapped address range, there is some multicasting happening from smem to the 32 threads, so that the effective smem bandwidth is higher than the 128B/cycle smem BW. Refer to my friend [Axel Feldmann's blog](https://feldmann.nyc/blog/smem-microbenchmarks) for more details.
 
 If you are in a situation where tiling is not enough to achieve full bandwidth amplification, you can use multicasting to close the gap by being smart about data sharing across multiple compute units.
 
 ### 5.3 Other Techniques
 
-Higher Memory Bandwidth
+There are other ways to achieve bandwidth amplification. I'll briefly list them here:
+- **Higher Memory Bandwidth**: If you don't have enough bandwidth, just increase it :). This is a brute force solution that requires changing the hardware.
+- **Compression**: Compressing the data when doing data transfer in the memory hierarchy will increase the effective bandwidth. 
+- **Sparsity**: If the data is sparse, you only transfer the non-zero values along with some meta data indicating the position of the non-zero values. This is similar to compression and can increase the effective bandwidth.
+- **Fusion**: If you have multiple kernels that read the same data, you can fuse them into one kernel. This way the data is read only once and then consumed by all the kernels. This is similar to multicasting but at the kernel level. Batched gemm (A is shared across batches) is an example of fusion.
 
-compression/sparsity/fusion
 
-## 6.From Theory to Practice
+## 6. From Theory to Practice
 
-assume OS dataflow, timeloop
+This blog mostly focuses on analytical analysis on how to achieve full compute utilization by throughput matching across the memory hierarchy. In practice, they are some efforts required to realize the theoretical analysis. Also memory throughput matching is not the only factor one needs to consider (might be the most important one though). Here are some other factors to consider:
 
-fix dataflow, search hw config
+- **Power Throttle**: As [Horace He noted in his blog](https://www.thonking.ai/p/strangely-matrix-multiplications), big square gemm these days are power throttled. So optimizing perf/W with a fixed power cap becomes more important.
+- **(Static) Memory Latency**: Static memory latency grows across generations of HBM. This means if we don't give enough memory level parallelism (MLP), we may be latency bound rather than bandwidth bound. My way of looking at this if you are latency bound it just means your achieved bandwidth is even lower than the peak bandwidth (13.3 B/cycle/SM), hence it's still a insufficient bandwidth issue. That's why both [cutlass](https://github.com/NVIDIA/cutlass/blob/62750a2b75c802660e4894434dc55e839f322277/include/cutlass/gemm/collective/builders/sm100_umma_builder.inl#L84) and triton ([num_stages in triton.config](https://triton-lang.org/main/python-api/generated/triton.Config.html)) use multiple DMA stages to hide memory latency.
+- **Bank Conflict**: If you don't think about your smem access pattern carefully you will encounter smem bank conflict, which lowers the effective smem bandwidth. You can't even reach the 128 B/cycle bandwidth. There are many ways to avoid bank conflict and utilize smem multicasting. Refer to my friend [Axel Feldmann's blog](https://feldmann.nyc/blog/smem-microbenchmarks) for more details.
 
-memory latency i.e. pipelining not considered
+All the analysis in this blog applies to tensor core gemm (or any application) obviously. But it's harder to saturate tensor core throughput precisely because of the factor mentioned above. In our simple CUDA core gemm example, we are not power throttled. And since the CUDA core throughput is lower than tensor core, the operand delivery throughput requirement is lower. So even if we don't do multiple DMA stage to hide memory latency we are fine. But for tensor core gemm, we need to consider all the factors mentioned above. 
 
-smem->rf bank conflict, axel's blog
-
-can apply analysis to tc
+One final thought is all the analysis assume output-stationary (OS) dataflow. With a different hardware config, the best dataflow may change. And if you change the dataflow, the throughput matching requirement will change. But the general principle of throughput matching across the memory hierarchy still applies.
 
 ## 7. Summary
+
+- It's not straightforward to achieve full compute utilization even if roofline analysis tells you are compute-bound. We need a more realistic machine model that exposes the memory hierarchy to guide us to achieve full compute utilization.
+- In order to achieve full compute utilization, the operand delivery throughput across the memory hierarchy needs to match the compute throughput of the CUDA core. Bandwidth amplification at every level of the memory hierarchy is the key to achieve throughput matching.
+- Tiling and multicasting are two popular techniques to achieve bandwidth amplification by exploiting the notion of data reuse. They can be used at different levels of the memory hierarchy and can be combined together.
+- After achieving operand delivery throughput matching, there are other factors to consider to achieve full performance, including power throttle, memory latency, and bank conflict, etc.
 
 ## 8. Additional references
 
