@@ -22,17 +22,17 @@ I argue **without careful thinking it's not easy to achieve the peak compute thr
 
 In this blog, I'll use matrix multiplication on CUDA cores as an example to illustrate how to achieve theoretical peak compute throughput. **In short, the memory system needs to deliver operands to the compute units at a rate that matches the compute units' consumption rate, using careful tiling at every level of the memory hierarchy to achieve bandwidth amplification.** Then I'll briefly touch upon some alternative ways to achieve this bandwidth amplification.
 
-This blog will be centered around **how to achieve throughput matching rather than latency hiding across pipeline stages for a SIMT program**. Even though the conventional GPU SIMT programming (non tensor core) education we receive (myself included) teaches us the goal is to achieve full (memory) latency hiding. I argue it's not the best way to think about it. Memory latency in particular is a function of memory throughput (i.e. $latency = static\_latency + \frac{tile\_size}{memory\_BW}$). So throughput is the first class citizen and latency is a by-product. Therefore the first priority is throughput matching.
+This blog will be centered around **how to achieve throughput matching rather than latency hiding across pipeline stages for a SIMT program**. Even though the conventional GPU SIMT programming (non tensor core) education we receive (myself included) teaches us the goal is to achieve full (memory) latency hiding. I argue it's not the best way to think about it. Memory latency in particular is a function of memory throughput (i.e. $\text{latency} = \text{static\_latency} + \frac{\text{tile\_size}}{\text{memory\_BW}}$). So throughput is the first class citizen and latency is a by-product. Therefore the first priority is throughput matching.
 
-## Example Problem: Matrix Multiplication on CUDA Cores
+## 1. Example Problem: Matrix Multiplication on CUDA Cores
 
-### Motivation
+### 1.1 Motivation
 
 Many people have attempted to write a CUDA core fp32 gemm kernel that matches cuBLAS's performance. [Simon Boehm's blog](https://siboehm.com/articles/22/CUDA-MMM) is the one I followed. Though his blog is super informative, I feel like the most important optimization that gets you most of the way is buried behind lots of less important optimizations. I tried writing a CUDA core gemm on Nvidia V100 GPU myself and gets 88% of cuBLAS's performance with only two optimizations over naive implementation:
 1. Shared memory (smem) tiling.
 2. Register File (RF) tiling.
 
-| algorithm           | throughput (TFLOPS) | % of cuBLAS         |
+| Algorithm           | Throughput (TFLOPS) | % of cuBLAS         |
 | ------------------- |:-------------------:|:-------------------:|
 | Naive               | 1.9                 | 16%                 |
 | smem tiling         | 3.7                 | 31%                 |
@@ -41,7 +41,7 @@ Many people have attempted to write a CUDA core fp32 gemm kernel that matches cu
 
 As you might notice, both optimizations has something to do with *tiling*, but on different levels of the memory hierarchy. Hopefully with the rest of the blog I can show you why tiling itself is enough to achieve (almost) peak compute throughput and how you should choose your tile size. All of my reasoning will be purely *analytical* without any silicon profiling and that's enough for us to achieve peak compute throughput.
 
-### Background
+### 1.2 Background
 
 First, let's define the gemm problem and some terminologies. We have two matrices `A` and `B`, and we want to compute the product `C = A * B`. The matrices are of size `[M, K]` and `[K, N]`, and we want to compute the product C of size `[M, N]`. For simplicity, we use `M=N=K=4096` as an example problem size in this blog.
 
@@ -51,7 +51,7 @@ The reason why people tend to use OS dataflow is because inter-SM communication 
 
 This tradeoff might change with the introduction of [distributed shared memory](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/) in Hopper that offers faster inter-SM communication within a threadblock cluster. I will explore this in a future blog.
 
-## Simple Machine Model is not Informative
+## 2. Simple Machine Model is not Informative
 
 Now that I've defined the gemm problem, let's see how we analyze whether it's a compute-bound or a memory-bound problem on an Nvidia [A100 80GB SXM](https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf) GPU using the roofline model. 
 
@@ -69,7 +69,7 @@ The arithmetic intensity of the A100 80GB SXM GPU is $\frac{64FMA/cycle}{13.3B/c
 
 With the actual A100 spec that these two resources are not unlimited, are we still compute-bound? It appears so since cuBLAS reaches the compute roofline. Why is our naive implementation only 16\% the speed of cuBLAS? Not knowable. How should we write the kernel such that it fully utilizes compute units similar to cuBLAS? Not knowable. The simple machine model is not informative enough to guide us to write the most optimized kernel to achieve the compute-bound goal.
 
-## A More Realistic Machine Model
+## 3. A More Realistic Machine Model
 
 This is where the more realistic machine model comes into play. It strikes a balance between abstraction and detail. It models the GPU memory hierarchy faithfully and at the same time is high-level enough to not distract us from hardware implementation details. The more realistic machine model gives us clear guidance on how to write a high performance CUDA core gemm kernel that achieves full compute unit utilization.
 
@@ -84,7 +84,7 @@ Note that from RF to CUDA core, the bandwidth is 512 B/cycle. This is the minimu
 
 Why do we only look at input data bandwidth requirement rather than both input and output? This is because we make an assumption of our kernel implementation that we use `output-stationary (OS) dataflow` at all levels of the memory hierarchy. The output only gets to write out to the next level once all the partial results are fully accumulated at the current level. It gets *full reuse*. This means the output bandwidth requirement is minimal and minute compare to input bandwidth requirement because we need to read the same input multiple times. So we can ignore output for simplicity. If we choose not to use OS everywhere, this assumption breaks. And we need to consider both input and output bandwidth requirement.
 
-## The Kernel Optimization Goal
+## 4. The Kernel Optimization Goal
 
 With the more realistic machine model in mind, we have established that the CUDA cores need 512 B/cycle input data from the memory hierarchy to get full compute utilization, which is our ultimate goal. All the input data come from DRAM. Through our kernel optimization, we need to create an illusion that the CUDA cores directly read DRAM at 512 B/cycle bandwidth. 
 
@@ -96,35 +96,105 @@ As I have already alluded, the bandwidth amplification problem of all the stages
 1. `DRAM->smem` bandwidth amplification (red dotted box).
 2. `smem->RF` bandwidth amplification (blue dotted box).
 
-If we succeed in both, we can then deliver 512 B/cycle of input data between all stages. Thus fully utilizing the CUDA core.
+In each sub-problem, after bandwidth amplification, we want to deliver 512 B/cycle in each stage. If we succeed in both, we can then deliver 512 B/cycle of input data between all stages across the whole pipeline. Thus fully utilizing the CUDA core.
 
-## How to Achieve Bandwidth Amplification
+## 5. How to Achieve Bandwidth Amplification
 
-There are many ways to achieve bandwidth amplification across the memory hierarchy. I will discuss two popular techniques tiling and multicasting. And briefly touch upon other techniques. These techniques should be agnostic to which levels of memory hierarchy we are at so that we can use different techniques at different levels. We can also combine multiple techniques together at the same level.
+There are many ways to achieve bandwidth amplification across the memory hierarchy. I will discuss two popular techniques [tiling (Sec. 5.1)](#51-tiling) and [multicasting (Sec. 5.2)](#52-multicasting). And briefly touch upon [other techniques (Sec. 5.3)](#53-other-techniques). These techniques should be agnostic to which levels of memory hierarchy we are at so that we can use different techniques at different levels. We can also combine multiple techniques together at the same level.
 
-### Tiling
+### 5.1 Tiling
 
-#### Shared Memory (smem) Tiling
+The general premise of tiling is that **it exploits *data reuse* to achieve bandwidth amplification**. In this section, I'll show how to apply tiling at DRAM->smem stage (also called [smem tiling (Sec. 5.1.1)](#511-shared-memory-smem-tiling)) and smem->RF stage (also called [RF tiling (Sec. 5.1.2)](#512-register-file-rf-tiling)) to achieve bandwidth amplification. I'll also describe how to choose the tile size such that we have enough bandwidth amplification factor at each stage to achieve full compute utilization.
+
+#### 5.1.1 Shared Memory (smem) Tiling
+
+The shared memory (smem) tiling tries to achieve bandwidth amplification at the `DRAM->smem` stage. The figure below shows the scenario. For instance, on the left figure, we transfer a tile of input data from DRAM to smem. And we expect each element in the tile can be read twice *only* from smem (not touching DRAM) by the next stage. In other words, the input element has a *reuse* of 2. This is equivalent to reading the same element twice from DRAM (bypassing smem) by the next stage (as shown on the right figure). Therefore we effectively achieve a bandwidth amplification factor of 2.
 
 ![smem_tiling](./smem_tiling.png)
 
-#### Register File (RF) Tiling
+Plugging in the real A100 numbers, we want the amplified bandwidth to be 512 B/cycle, and currently the `DRAM->smem` bandwidth is 13.3 B/cycle. So smem tiling should give us at least an amplification factor of $\frac{512}{13.3}=39$. This means, on average, each input element in smem should be reused at least 39 times. If we achieve this reuse factor of 39, then smem can give the CUDA core (and the whole pipeline) an illusion that it can supply 512 B/cycle from DRAM directly.
+
+Now I'll explain how to tile the gemm such that each input element is reused 39 times. Again, we assume we use `output-stationary (OS) dataflow`. The figure below shows the computation performed by each threadblock (SM) in the kernel.
+
+![OS_dataflow_SM](./OS_dataflow_SM.png)
+
+Now let's calculate the reuse factor of each input element. The total amount of computation is `BLOCK_M * BLOCK_N * K` FMA. And we read in tile A of size `BLOCK_M * K` from DRAM once and tile B of size `K * BLOCK_N` from DRAM once. Therefore, the reuse factor of each A element is $\frac{BLOCK\_M * BLOCK\_N * K}{BLOCK\_M * K} = BLOCK\_N$. And the reuse factor of each B element is $\frac{BLOCK\_M * BLOCK\_N * K}{K * BLOCK\_N} = BLOCK\_M$. We need the average input reuse factor to be 39. So `BLOCK_M = BLOCK_N = 39` would be sufficient to achieve full bandwidth amplification at the `DRAM->smem` stage. More realistically, a power of 2 tile size is more friendly to index calculation and memory system. So we choose `BLOCK_M = BLOCK_N = 64` for our smem tile size.
+
+
+#### 5.1.2 Register File (RF) Tiling
 
 ![rf_tiling](./rf_tiling.png)
 
-#### Putting It All Together
+Similarly the register file (RF) tiling tries to achieve bandwidth amplification at the `smem->RF` stage. The figure above shows the scenario. The RF can only read 128 B/cycle from smem but the CUDA core can consume 512 B/cycle from RF. So each cycles, the CUDA core needs 512B data, but smem can only supply 128B. This means each input element read from smem will be read 4 times by the CUDA core, i.e. a reuse factor of 4 at the `smem->RF` stage is needed.
+
+How to achieve a reuse factor of 4 at the `smem->RF` stage? We use the same OS dataflow at the `smem->RF` stage, meaning the RF holds an A tile of size `BLOCK_M * K` and a B tile of size `K * BLOCK_N`. A input reuse factor of 4 means `BLOCK_M = BLOCK_N = 4` for RF tile size. Then the `smem->RF` stage also gives the CUDA core an illusion that it can supply 512 B/cycle from smem directly.
+
+#### 5.1.3 Putting It All Together
 
 ![both_tiling](./both_tiling.png)
 
-### Multicasting
+Putting both smem and RF tiling together as shown above. The whole pipeline is `DRAM->smem->RF->CUDA core`:
+- With smem tiling (tile size of 64), we can make sure the `DRAM->smem` stage supplies 512 B/cycle to the rest of the pipeline, i.e. with tiling it acts as if we can directly read DRAM at 512 B/cycle throughput. 
+- With RF tiling (tile size of 4), we can make sure the `smem->RF` stage supplies 512 B/cycle to the pipeline, i.e. with tiling it acts as if we can directly read smem at 512 B/cycle throughput. 
+  
+Since we already know `RF->CUDA core` has enough throughput of 512 B/cycle. We can conclude that the whole pipeline has a throughput of 512 B/cycle to deliver the input data from DRAM to the CUDA core. Hence we have achieved full compute utilization.
 
-### Other Techniques
+Tiling enables data reuse which then enables bandwidth amplification. With sufficient bandwidth amplification, we will be able to achieve full compute utilization. This is why doing tiling alone gives us most of cuBLAS's performance because it's sufficient to achieve all bandwidth amplification requirements.
+
+
+#### 5.1.4 Local vs Global Reuse Factor
+
+Don't read this section if you don't want to be confused. If you are curious and have the same question as me, please continue.
+
+There is a subtle point that I want to clarify, which originally confused me a lot when I was writing this blog. The question is, for `DRAM->smem` stage, why do we need to amplify the bandwidth to 512 B/cycle rather than 128 B/cycle? The smem consumer, i.e. RF, can only read 128 B/cycle from smem anyways. So why don't we just amplify the bandwidth to 128 B/cycle, i.e. we only need a input reuse factor of $\frac{128}{13.3}=9.6$ (e.g. tile size of 16 would be sufficient) at the `DRAM->smem` stage?
+
+The answer is the number 16 is the local reuse factor at the `DRAM->smem` level. It doesn't mean the smem tile size is 16. The smem tile size can be larger (e.g. 64). This can be better explained with the actual loop nest of the gemm kernel.
+
+```python
+L1= 16 # DRAM->smem reuse factor
+L2= 4 # smem->RF reuse factor
+-----------------------------------------------------------
+gA = [M, K]
+gB = [K, N]
+for m0 in range(M // L1 // L2):
+  for n0 in range(N // L1 // L2):                   DRAM
+-----------------------------------------------------------
+    sA = gA[m0 * L1 * L2 : (m0 + 1) * L1 * L2, :] # [L1 * L2, K]
+    sB = gB[:, n0 * L1 * L2 : (n0 + 1) * L1 * L2] # [K, L1 * L2]
+    for m1 in range(L1):
+      for n1 in range(L1):                          smem
+-----------------------------------------------------------
+        rA = sA[m1 * L2 : (m1 + 1) * L2, :] # [L2, K]
+        rB = sB[:, n1 * L2 : (n1 + 1) * L2] # [K, L2]
+        for m2 in range(L2):
+          for n2 in range(L2):                        RF
+-----------------------------------------------------------
+            for k in range(K):
+              idx_m = m0 * L1 * L2 + m1 * L2 + m2
+              idx_n = n0 * L1 * L2 + n1 * L2 + n2
+              C[idx_m, idx_n] += rA[m2, k] * rB[k, n2]
+```
+
+It's pretty clear from the loop nest that the number 16 is the local reuse factor at the `DRAM->smem` level, i.e. `L1 = 16`. It doesn't mean the smem tile size is 16. Because there can be further reuse at the `smem->RF` level, e.g. `L2 = 4`. So the global smem input reuse factor is `L1 * L2 = 64`, i.e. fetch an element into smem once, then it consumed 64 times by all the lower level in aggregate. Out of this 64 times, the RF will read the smem 16 (`L1`) times. Each read, will trigger a further 4 (`L2`) reads from the CUDA core. Hence, in order to achieve smem reuse factor of 64, we need a smem tile size of 64. So the number 16 here means at the `DRAM->smem` level, we reuse the *RF tile* by a factor of 16. But each element inthe RF tile has a reuse factor of 4 at a lower level. So for *each individual element*, it is reused `16 * 4 = 64` times. The smem tile size we often refers to is at individual element level. So the individual element tile size at smem level is 64.
+
+Similarly at the RF level, the local reuse factor is `L2 = 4`. Since there is no further reuse below the RF, for each element, the global RF input reuse factor is indeed 4. To achieve this reuse factor of 4, we need a RF tile size of 4.
+
+**TL DR:** I think this local/global reuse factor distinction really confused people and we shouldn't think about it. For simplicity, we should only think about the global reuse factor, i.e. we want to have bandwidth amplification at each stage to match the 512 B/cycle requirement of the whole pipeline. And the bandwidth amplification has a requirement of the (global) reuse factor of the input element at each stage. Then this reuse factor requirement will translate to a tile size requirement at each stage.
+
+
+### 5.2 Multicasting
+
+In order for multicasting to work, it relies on the conditions that:
+1. There are multiple compute units in the system.
+2. They request the same input data.
+
+### 5.3 Other Techniques
 
 Higher Memory Bandwidth
 
 compression/sparsity/fusion
 
-## From Theory to Practice
+## 6.From Theory to Practice
 
 assume OS dataflow, timeloop
 
@@ -134,6 +204,8 @@ memory latency i.e. pipelining not considered
 
 smem->rf bank conflict, axel's blog
 
-## Summary
+can apply analysis to tc
 
-## Additional references
+## 7. Summary
+
+## 8. Additional references
