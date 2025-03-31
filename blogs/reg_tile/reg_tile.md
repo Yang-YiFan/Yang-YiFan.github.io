@@ -4,6 +4,8 @@ layout: default
 
 # How to Make a Compute-bound Problem Actually Compute-bound (WIP)
 
+*Disclaimer: The content of this blog reflects my personal experiences and opinions while learning GPU programming in my own time. All information presented is publicly available and does not represent the views or positions of NVIDIA Corporation or any of its affiliates.*
+
 One of the first thing when a computer architect would do when they want to accelerate an application is to determine whether the application is compute-bound or memory-bound. To do that, they often employ the [roofline model](https://en.wikipedia.org/wiki/Roofline_model).
 
 If the application is deemed memory-bound, then the architect would focus on ways to 
@@ -184,9 +186,58 @@ Similarly at the RF level, the local reuse factor is `L2 = 4`. Since there is no
 
 ### 5.2 Multicasting
 
+Tiling is not the only way to achieve bandwidth amplification. Another popular technique is multicasting. The way multicasting works is that if multiple units request the same data, the memory system only needs to generate 1 request and often get 1 response. When the response is closer to the unit in the memory system, it gets duplicated to all the units. In this way, the response bandwidth is higher than the request bandwidth, i.e. gets amplified.
+
 In order for multicasting to work, it relies on the conditions that:
 1. There are multiple compute units in the system.
 2. They request the same input data.
+
+How can we leverage leverage multicasting to achieve bandwidth amplification?  We will use `DRAM->smem` stage as an example and assumes there is some bandwidth amplification mechanism in the `DRAM->smem NoC`.
+
+In the [above example](#511-shared-memory-smem-tiling), when we do smem tiling, we conclude that we need at least an input reuse factor of 39 to achieve full bandwidth amplification at the `DRAM->smem` stage, which translates into a minimum smem tile size of 39. Let's assume our smem is very small and can't hold a tile size of 39. It's only big enough to hold a tile size of 32. Looks like we can't achieve the full 512 B/cycle bandwidth requirement at the `DRAM->smem` stage. Are we doomed? No. We can still achieve full bandwidth requirement by leveraging multicasting to close the gap.
+
+![multicasting](./multicasting.png)
+
+We show an example of 4 threadblocks (on 4 SMs) each with a `BLOCK_M=BLOCK_N=32` smem tile size with `OS dataflow`. According to the above analysis, tile size 32 is not enough to achieve full bandwidth amplification at the `DRAM->smem` stage. In total, the 4 SMs will read 4 A tiles (`4 * BLOCK_M * K`) and 4 B tiles (`4 * K * BLOCK_N`) from DRAM, which is `4 * (32 + 32) * K * 4B = 1024*K Byte`. Divide that by the 4 SMs DRAM BW (4 * 13.3 B/cycle), we need `19.2 * K` cycles to read all the data. And the CUDA cores will conduct `4 * BLOCK_M * BLOCK_N * K` FMA, consuming `4 * BLOCK_M * BLOCK_N * K * 2` elements of A and B (at a rate of 512 B/cycle). So the compute cycle is `4 * 32 * 32 * K * 2 / 512 = 16 * K` cycles. Since `19.2 * K > 16 * K`, we are `DRAM->smem` bandwidth limited. This just another way of saying why tile size of 32 is not enough.
+
+But multicasting will solve this issue. Notice that the 4 SMs are not reading completely different data. In fact, they are only reading 2 distinct A tiles (`2 * BLOCK_M * K`) and 2 distinct B tiles (`2 * K * BLOCK_N`). And we know that there is a NoC magic that can multicast the 2 A tiles and 2 B tiles to all 4 SMs for free. So the number of cycles need to read all the data is `19.2 * K / 2 = 9.6 * K` cycles, half of the original `19.2 * K` cycles if no multicasting. And the compute cycle is `16 * K` cycles. So we are no longer `DRAM->smem` bandwidth limited, we are compute limited.
+
+#### 5.2.1 One View of Multicasting
+
+A way to think about this is that multicasting basically doubles the DRAM bandwidth, because there is a 2x request/response coalescing happening between the 4 SMs. Then the high-level message is that even if from a single SM's perspective, tile size 32 is not enough, multicasting across SMs can give another 2x bandwidth in the `DRAM->smem` stage. So the reuse factor requirement of 39 can be broken down into 2 parts:
+- smem tile reuse within a SM (with reuse factor `L1=32` for example)
+- Multicasting across SMs (with reuse factor `L2=2` for example)
+
+As long as `L1 * L2 >= 39`, we can achieve full bandwidth amplification at the `DRAM->smem` stage.
+
+#### 5.2.2 Another View of Multicasting
+
+Another equivalent way to think about multicasting is that it effectively increase the smem tile size. If we package the 4 threadblocks (4 SMs) into a cluster (i.e. a [threadblock cluster](https://docs.nvidia.com/cuda/cuda-c-programming-guide/#thread-block-clusters)), then effectively for this cluster we have `BLOCK_M=BLOCK_N=64`. Therefore the input reuse factor is 64, higher than the 39 we need. So even though each SM has a smem tile size of only 32, the multicasting across SMs effectively gives us a smem tile size of 64.
+
+This is exactly the use case of threadblock cluster. In more formal terms, here we create a `2x2` threadblock cluster with threadblock tile size of `BLOCK_M=BLOCK_N=32`. The cluster tile size is `BLOCK_M=BLOCK_N=64`. The benefit of this is that if for reasons (e.g. smem capacity limit) you can't have a large threadblock tile size and then you are `DRAM->smem` bandwidth limited, you can use threadblock cluster to effectively increase the smem tile size and achieve full bandwidth amplification.
+
+#### 5.2.3 Threadblock Rasterization
+
+Importantly, for multicasting to work, you need multiple SMs to request the same data. Often this is achieved by changing the dataflow/mapping of the kernel. This is also known as [threadblock rasterization](https://github.com/NVIDIA/cutlass/blob/main/media/docs/efficient_gemm.md#threadblock-rasterization). It is basically saying what's the order for the SMs to executes all the threadblocks.
+
+![threadblock_rasterization](./threadblock_rasterization.png)
+
+Above we show three different rasterization orders with a 4x4 threadblock gemm and 4 SMs. Assume `BLOCK_M=BLOCK_N=32`. The left is a naive rasterization order where we execute the threadblocks in a row-wise order. As you can see, the amount of unique input data requested all 4 SMs in this row-wise order is `4 * BLOCK_M * K + 1 * K * BLOCK_N = 160 * K`. And the total amount of input data requested is `4 * (BLOCK_M * K + K * BLOCK_N) = 256 * K`. With this rasterization order, we have a multicasting factor of `256 / 160 = 1.6`.
+
+The middle is the rasterization we used in the [above example](#52-multicasting) to leverage multicasting. The amount of unique input data requested all 4 SMs in this rasterization order is `2 * BLOCK_M * K + 2 * K * BLOCK_N = 128 * K`. And the total amount of input data requested is `2 * (BLOCK_M * K + K * BLOCK_N) = 256 * K`. With this rasterization order, we have a multicasting factor of `256 / 128 = 2`, better than the 1.6 of the row-wise order!
+
+The right is a intentionally constructed bad rasterization order that will have no multicasting. As you can see, there is no input data sharing between the 4 SMs. So the multicasting factor is 1.
+
+So by changing the rasterization order, we can improve the multicasting factor. This is often done in software by the user. Two examples would be the [cutlass gemm rasterization](https://github.com/NVIDIA/cutlass/blob/62750a2b75c802660e4894434dc55e839f322277/include/cutlass/gemm/kernel/sm90_tile_scheduler.hpp#L105) and the [triton gemm rasterization](https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html#compute-kernel) (referred as L2 cache optimization in the tutorial).
+
+#### 5.2.4 Multicasting in Hardware
+
+As you might have imagined, multicasting requires some hardware support. There are at least 3 kinds of multicasting in Nvidia GPUs (Hopper+) across the memory hierarchy:
+- **[Threadblock Cluster](https://docs.nvidia.com/cuda/cuda-c-programming-guide/#thread-block-clusters)**: The user specifies which set of threadblocks to form a cluster (e.g. `2x2` in the example above). And the hardware will take care of the multicasting within the cluster.
+- **[L2 Request Coalescer (LRC)](https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#metrics-decoder)**: The user doesn't specify which set of threadblocks group together. The hardware will opportunistically find the duplicated input requests and group them together for multicasting.
+- **smem**: Within a warp, with no bank conflict, each cycle all 32 threads can read 128B data from smem. If each thread reads more than 4B (e.g. 8B using `LDS.64` and 16B using `LDS.128`) and all 32 threads read data from some overlapped address range, there is some multicasting happening from smem to the 32 threads, so that the effective smem bandwidth is higher than the 128B/cycle smem BW. Refer to my friend [Axel's blog](https://feldmann.nyc/blog/smem-microbenchmarks) for more details.
+
+If you are in a situation where tiling is not enough to achieve full bandwidth amplification, you can use multicasting to close the gap by being smart about data sharing across multiple compute units.
 
 ### 5.3 Other Techniques
 
@@ -209,3 +260,6 @@ can apply analysis to tc
 ## 7. Summary
 
 ## 8. Additional references
+
+- [More about threadblock rasterization](https://research.colfax-intl.com/cutlass-tutorial-persistent-kernels-and-stream-k/)
+- [GTC 2025 How to Ace a Finance Developer Interview: A Deep Dive into GPU Matrix Optimization [S73619]](https://register.nvidia.com/flow/nvidia/gtcs25/ap/page/catalog/session/1729878854303001ra7O)
