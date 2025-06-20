@@ -122,7 +122,11 @@ Now I'll explain how to tile the gemm such that each input element is reused 39 
 
 ![OS_dataflow_SM](./OS_dataflow_SM.png)
 
-Now let's calculate the reuse factor of each input element. The total amount of computation is `BLOCK_M * BLOCK_N * K` FMA. And we read in tile A of size `BLOCK_M * K` from DRAM once and tile B of size `K * BLOCK_N` from DRAM once. Therefore, the reuse factor of each A element is $\frac{BLOCK\_M * BLOCK\_N * K}{BLOCK\_M * K} = BLOCK\_N$. And the reuse factor of each B element is $\frac{BLOCK\_M * BLOCK\_N * K}{K * BLOCK\_N} = BLOCK\_M$. We need the average input reuse factor to be 39. So `BLOCK_M = BLOCK_N = 39` would be sufficient to achieve full bandwidth amplification at the `DRAM->smem` stage. More realistically, a power of 2 tile size is more friendly to index calculation and memory system. So we choose `BLOCK_M = BLOCK_N = 64` for our smem tile size.
+Now let's calculate the reuse factor of each input element. The total amount of computation is `BLOCK_M * BLOCK_N * K` FMA. And we read in tile A of size `BLOCK_M * K` from DRAM once and tile B of size `K * BLOCK_N` from DRAM once. Therefore, the reuse factor of each A element is $\frac{BLOCK\_M * BLOCK\_N * K}{BLOCK\_M * K} = BLOCK\_N$. And the reuse factor of each B element is $\frac{BLOCK\_M * BLOCK\_N * K}{K * BLOCK\_N} = BLOCK\_M$. We need the average input reuse factor to be 39. So `BLOCK_M = BLOCK_N = 39` would be sufficient to achieve full bandwidth amplification at the `DRAM->smem` stage.
+
+If `BLOCK_M != BLOCK_N`, then the average reuse factor per input element is $\frac{2 * BLOCK\_M * BLOCK\_N * K}{BLOCK\_M * K + K * BLOCK\_N} = 2 * \frac{BLOCK\_M * BLOCK\_N}{BLOCK\_M + BLOCK\_N}$ (because the total amount of read is $2 * BLOCK\_M * BLOCK\_N * K$). We just need to make sure this average reuse factor is at least 39.
+
+More realistically, a power of 2 tile size is more friendly to index calculation and memory system. So we choose `BLOCK_M = BLOCK_N = 64` for our smem tile size.
 
 
 #### 5.1.2 Register File (RF) Tiling
@@ -263,7 +267,37 @@ All the analysis in this blog applies to tensor core gemm (or any application) o
 
 One final thought is all the analysis assume output-stationary (OS) dataflow. With a different hardware config, the best dataflow may change. And if you change the dataflow, the throughput matching requirement will change. But the general principle of throughput matching across the memory hierarchy still applies.
 
-## 7. Summary
+## 7. Bonus: A GEMV Example
+
+So far we've only covered one example, which is a gemm kernel. Let's look at another example, a fp32 gemv kernel to prove that the above analysis has good generalization (even to memory-bound kernels).
+
+### 7.1 FLOPS Estimate with Realistic Machine Model
+
+Because this is a gemv case, `N=1`. Assume we do the common output-stationary (OS) dataflow, where each SM is responsible for generating a output tile of `BLOCK_M=BLOCK_N=1`. And we load the values directly from DRAM to RF (bypassing smem). So the new machine model is shown below:
+
+![]()
+
+For this computation, each SM is conducting a vector (of length `K`) dot product. Given this tiling factor, the RF level date reuse factor is $\frac{2 * BLOCK\_M * BLOCK\_N * K}{BLOCK\_M * K + K * BLOCK\_N} = 2 * \frac{BLOCK\_M * BLOCK\_N}{BLOCK\_M + BLOCK\_N} = 1$. This means there is no RF level data reuse/bandwidth amplification. Increasing `BLOCK_M` will help.
+
+Now let's calculate the achievable flops with this mapping. Since there is no BW amplification, RF feeds the CUDA core at the same 13.3 B/cycle rate as DRAM feeds the RF. Each FMA requires 8 B/cycle (2 4B operands). So the achievable flops is `13.3 / 8 = 1.64 FMA/cycle/SM`.
+
+### 7.2 FLOPS Estimate with Roofline Model
+
+The arithmetic intensity of the gemv is $\frac{M * N * K}{4 * (M * K + N * K)} = \frac{M * N}{4 * (M + N)} \sim \frac{1}{4} \text{FMA}/B$. And A100's arithmetic intensity elbow is $\frac{64 \text{FMA}/cycle}{13.3 B/cycle} = 4.8 \text{FMA}/B$. So the gemv is memory-bound. Then per SM flops is `arithmetic intensity * BW = 1/4 FMA/B * 13.3 B/cycle = 3.33 FMA/cycle/SM`.
+
+This is 2x higher than the achievable flops with the realistic machine model! This means the realistic gemv kernel has not even reached the memory roofline.
+
+### 7.3 What Went Wrong?
+
+It's because the realistic machine model is not realistic enough lol. If each SM is individually connected to the DRAM, then `1.64 FMA/cycle` is indeed the achievable flops. All the SMs are connected through L2 which offers multicasting ability through [LRC](https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#metrics-decoder) (as described in [Sec. 5.2.4](#524-multicasting-in-hardware)).
+
+What does this mean in the context of our gemv kernel? This means we get a BW amplification from DRAM to RF because all SMs read the same vector B in. So across all SMs, our input reuse factor is $\frac{2 * M * N * K}{M * K + K * N} \sim 2$. This means the amplified DRAM->SM BW is `2 * 13.3 B/cycle = 26.6 B/cycle`. Hence, the achievable flops is `26.6 B/cycle / 8 B/cycle = 3.33 FMA/cycle/SM`, which matches the roofline projection. **With the help of LRC, the gemv kernel can reach memory roofline.**
+
+![]()
+
+The effect of LRC BW amplification is illustrated above. Another way to view it is without LRC, only half of the DRAM BW is used to fetch the matrix A, the other half is used to redundantly fetch the same vector B. With LRC, we can fetch B once and multicast it to all SMs, so most of the DRAM BW is used to fetch A, hence reaching the memory roofline.
+
+## 8. Summary
 
 - It's not straightforward to achieve full compute utilization even if roofline analysis tells you are compute-bound. We need a more realistic machine model that exposes the memory hierarchy to guide us to achieve full compute utilization.
 - In order to achieve full compute utilization, the operand delivery throughput across the memory hierarchy needs to match the compute throughput of the CUDA core. Bandwidth amplification at every level of the memory hierarchy is the key to achieve throughput matching.
@@ -272,7 +306,7 @@ One final thought is all the analysis assume output-stationary (OS) dataflow. Wi
 
 Thanks to my friend [Axel Feldmann](https://feldmann.nyc/) for the inspiration of this topic and [Jenny Huang](https://hqjenny.com/) for proofreading and helpful discussion.
 
-## 8. Additional references
+## 9. Additional references
 
 - [More about threadblock rasterization](https://research.colfax-intl.com/cutlass-tutorial-persistent-kernels-and-stream-k/)
 - [GTC 2025 How to Ace a Finance Developer Interview: A Deep Dive into GPU Matrix Optimization [S73619]](https://register.nvidia.com/flow/nvidia/gtcs25/ap/page/catalog/session/1729878854303001ra7O)
