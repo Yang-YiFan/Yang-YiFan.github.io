@@ -275,7 +275,7 @@ So far we've only covered one example, which is a gemm kernel. Let's look at ano
 
 Because this is a gemv case, `N=1`. Assume we do the common output-stationary (OS) dataflow, where each SM is responsible for generating a output tile of `BLOCK_M=BLOCK_N=1`. And we load the values directly from DRAM to RF (bypassing smem). So the new machine model is shown below:
 
-![]()
+![realistic_model_gemv](./realistic_model_gemv.png)
 
 For this computation, each SM is conducting a vector (of length `K`) dot product. Given this tiling factor, the RF level date reuse factor is $\frac{2 * BLOCK\_M * BLOCK\_N * K}{BLOCK\_M * K + K * BLOCK\_N} = 2 * \frac{BLOCK\_M * BLOCK\_N}{BLOCK\_M + BLOCK\_N} = 1$. This means there is no RF level data reuse/bandwidth amplification. Increasing `BLOCK_M` will help.
 
@@ -293,9 +293,9 @@ It's because the realistic machine model is not realistic enough lol. If each SM
 
 What does this mean in the context of our gemv kernel? This means we get a BW amplification from DRAM to RF because all SMs read the same vector B in. So across all SMs, our input reuse factor is $\frac{2 * M * N * K}{M * K + K * N} \sim 2$. This means the amplified DRAM->SM BW is `2 * 13.3 B/cycle = 26.6 B/cycle`. Hence, the achievable flops is `26.6 B/cycle / 8 B/cycle = 3.33 FMA/cycle/SM`, which matches the roofline projection. **With the help of LRC, the gemv kernel can reach memory roofline.**
 
-![]()
+![lrc_multicast](./lrc_multicast.png)
 
-The effect of LRC BW amplification is illustrated above. Another way to view it is without LRC, only half of the DRAM BW is used to fetch the matrix A, the other half is used to redundantly fetch the same vector B. With LRC, we can fetch B once and multicast it to all SMs, so most of the DRAM BW is used to fetch A, hence reaching the memory roofline.
+The effect of LRC BW amplification is illustrated above. We double the effective DRAM BW per SM. Another way to view it is without LRC, only half of the DRAM BW is used to fetch the matrix A, the other half is used to redundantly fetch the same vector B. With LRC, we can fetch B once and multicast it to all SMs, so most of the DRAM BW is used to fetch A, hence reaching the memory roofline.
 
 ## 8. Summary
 

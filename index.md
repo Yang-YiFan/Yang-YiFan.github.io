@@ -1,4 +1,4 @@
-I am a Deep Learning Architect at [NVIDIA](https://www.nvidia.com/en-us/), working on deep learning inference architecture.
+I am a Deep Learning Architect at [NVIDIA](https://www.nvidia.com/en-us/), working on deep learning inference architecture. I work on both hardware and software techniques to enable ultra-low latency LLM inference on NVIDIA GPUs.
 
 I graduated my Ph.D. in CS from MIT advised by Professor [Daniel Sanchez](http://people.csail.mit.edu/sanchez/) and Professor [Joel Emer](https://people.csail.mit.edu/emer/).
 My thesis work focuses on computer architecture, specifically on accelerating irregular and sparse applications such as sparse transformers (GPT, Bert, etc.), sparse CNNs, sparse tensor algebra, and graph analytics.
