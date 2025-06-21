@@ -1,12 +1,16 @@
-# Using TMA Load and Prefetch in Cute
+# Using TMA Load, Prefetch, and Multicast Load in Cute
 
 ## Requirements
 
-CUDA and Cutlass are required to build the code.
+CUDA and Cutlass are required to build the c++ code.
 
-Only works on Hopper.
+Cute dsl is required to run the python code.
+
+Works on Hopper (sm_90a) and Blackwell (sm_100a).
 
 ## Usage
+
+### C++
 
 Create your own `Makefile.paths` (by copying [Makefile.paths.example](./Makefile.paths.example)) and set `CUDA_HOME` and `CUTLASS_HOME`.
 
@@ -65,4 +69,10 @@ block: (6, 0, 0), cluster: (3, 0, 0), cluster rank: 0, value: 3.000000, 3.000000
 block: (7, 1, 0), cluster: (3, 0, 0), cluster rank: 3, value: 3.000000, 3.000000
 block: (6, 1, 0), cluster: (3, 0, 0), cluster rank: 2, value: 3.000000, 3.000000
 execution time 6.843968 ms
+```
+
+### Python
+
+```bash
+python cute_tma.py
 ```
