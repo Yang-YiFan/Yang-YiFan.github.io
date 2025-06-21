@@ -1,10 +1,10 @@
-# Using TMA Load, Prefetch, and Multicast Load in Cute
+# Using TMA Load, Prefetch, and Multicast Load in CuTe
 
 ## Requirements
 
 CUDA and Cutlass are required to build the c++ code.
 
-Cute dsl is required to run the python code.
+CuTe DSL is required to run the python code.
 
 Works on Hopper (sm_90a) and Blackwell (sm_100a).
 
