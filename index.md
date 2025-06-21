@@ -15,7 +15,7 @@ I plan to write blogs during my process of learning CUDA/Cutlass/Cute/Triton pro
 
 - ### [Using TMA Load, Prefetch, and Multicast Load in CuTe](./blogs/cute_tma/cute_tma.html)
 - ### [How to Make a Compute-bound Problem Actually Compute-bound](./blogs/reg_tile/reg_tile.md)
-- ### [CuTe Layout and Tensor](./cute_layout/cuta_layout.md)
+- ### [CuTe Layout and Tensor](./blogs/cute_layout/cute_layout.md)
 
 # Publications
 

@@ -46,7 +46,7 @@ A(m, n) # natural coordinate of tensor
   = storage[m * 2 + n * 1] # physical index in memory
 ```
 
-<img src="./layout.png" alt="layout" width="60%">
+<img src="./layout.png" alt="layout" width="40%">
 
 ```bash
 # Symbolically, this describes a MxN column major matrix
@@ -225,7 +225,7 @@ Often times, we want to tile/partition a tensor into smaller sub-tiles and each 
 
 Suppose we want to re-partition the final layout (in the blocked product example above) `((M0, M1), (N0, N1)) : ((1, N1*M0*N0), (M0, 1*M0*N0))` into many 2d sub-tiles, with each sub-tile of shape `(M0, N0)`. The figure below shows this partitioning scheme. 
 
-![Local Tile](./local_tile.png)
+<img src="./local_tile.png" alt="Local Tile" width="60%">
 
 After partitioning, we end up with `M1 * N1` sub-tiles (also organized in a 2d grid), with each CTA processing a sub-tile for instance. And we would want to get the sub-tile at coordinate `(m1, n1)`. The purple box in the figure shows the sub-tile at coordinate `(0, 2)`. 
 
