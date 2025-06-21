@@ -8,7 +8,6 @@ CUTLASS_NVCC_FLAGS= \
 		-I$(CUTLASS_HOME)/tools/util/include \
 		-I$(CUTLASS_HOME)/tools/library/include \
 		--expt-relaxed-constexpr \
-		-uumn \
 
 all: cute_layout
 
