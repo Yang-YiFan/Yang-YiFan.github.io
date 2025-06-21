@@ -6,6 +6,8 @@ layout: default
 
 *Disclaimer: The content of this blog reflects my personal experiences and opinions while learning GPU programming in my own time. All information presented is publicly available and does not represent the views or positions of NVIDIA Corporation or any of its affiliates.*
 
+## 0. Introduction
+
 The [Tensor Memory Accelerator (TMA)](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/) is a hardware unit introduced in the NVIDIA Hopper architecture to accelerate tensor data movement. 
 In this blog, I will show how to [load (Sec. 3)](#3-tma-load), [prefetch (Sec. 4)](#4-tma-prefetch) and [multicast load (Sec. 5)](#5-tma-multicast-load) a tensor using TMA in Cute C++. All the code in this blog can be found [here](https://github.com/Yang-YiFan/Yang-YiFan.github.io/tree/main/blogs/cute_tma/code).
 To formally motivate TMA, we need to wind the clock back a bit to Volta.
