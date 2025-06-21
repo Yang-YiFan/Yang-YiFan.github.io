@@ -6,11 +6,11 @@ layout: default
 
 *Disclaimer: The content of this blog reflects my personal experiences and opinions while learning GPU programming in my own time. All information presented is publicly available and does not represent the views or positions of NVIDIA Corporation or any of its affiliates.*
 
-In this blog, I will show how to [load (Sec. 3)](#3-tma-load), [prefetch (Sec. 4)](#4-tma-prefetch) and [multicast load (Sec. 5)](#5-tma-multicast-load) a tensor using TMA in Cute. All the code in this blog can be found [here](https://github.com/Yang-YiFan/Yang-YiFan.github.io/tree/main/blogs/cute_tma/code).
+The [Tensor Memory Accelerator (TMA)](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/) is a hardware unit introduced in the NVIDIA Hopper architecture to accelerate tensor data movement. 
+In this blog, I will show how to [load (Sec. 3)](#3-tma-load), [prefetch (Sec. 4)](#4-tma-prefetch) and [multicast load (Sec. 5)](#5-tma-multicast-load) a tensor using TMA in Cute C++. All the code in this blog can be found [here](https://github.com/Yang-YiFan/Yang-YiFan.github.io/tree/main/blogs/cute_tma/code).
+To formally motivate TMA, we need to wind the clock back a bit to Volta.
 
 **[UPDATE]** The new [cute_dsl](https://docs.nvidia.com/cutlass/media/docs/pythonDSL/cute_dsl.html) came out. I wrote a simple [tma copy kernel](https://github.com/Yang-YiFan/Yang-YiFan.github.io/tree/main/blogs/cute_tma/code/cute_tma.py) example in cute dsl since there is still no simple example available online. It uses the newer [tma_partition](https://github.com/NVIDIA/cutlass/blob/dc4817921edda44a549197ff3a9dcf5df0636e7b/include/cute/atom/copy_traits_sm90_tma.hpp#L1354) API as opposed to the older one introduced in this blog. But they are functionally equivalent. I annotated the cute dsl code to explain the usage of the new API.
-
-The [Tensor Memory Accelerator (TMA)](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/) is a hardware unit introduced in the NVIDIA Hopper architecture to accelerate tensor data movement. To formally motivate TMA, we need to wind the clock back a bit to Volta.
 
 ## 1. Why TMA?
 
