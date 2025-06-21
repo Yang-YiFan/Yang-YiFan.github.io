@@ -1,7 +1,4 @@
-#CUDA_BUILD=cuda-35361325
-#CUDA_HOME=/home/scratch.svc_compute_arch/release/cuda_toolkit/internal/$(CUDA_BUILD)
-CUDA_HOME=/home/yifany-scratch/cuda-gpgpu-35361325
-CUTLASS_HOME?=/home/yifany-scratch/dynamic-kernel-generator/cutlass
+include Makefile.paths
 
 ARCH=sm_100a
 CCBIN?=$(shell which g++)
