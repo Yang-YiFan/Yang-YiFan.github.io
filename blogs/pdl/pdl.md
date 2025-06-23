@@ -20,6 +20,8 @@ In this blog, we focus on introducing the lesser known PDL, which is a relativel
 Importantly, it works on a stream of **dependent** kernels, which is a common pattern in neural network training and inference.
 If the kernels are independent, you should use multi-stream instead.
 
+All the code in this blog can be found [here](https://github.com/Yang-YiFan/Yang-YiFan.github.io/tree/main/blogs/pdl/code).
+
 ## 1. What is PDL?
 
 **[Programmatic Dependent Launch (PDL)](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#programmatic-dependent-launch-and-synchronization)** is a hardware feature that is introduced in the Hopper architecture.
