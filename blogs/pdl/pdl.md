@@ -141,6 +141,16 @@ In order for the PDL kernel overlap to be functional, the following conditions n
 Therefore, the placement of `griddepcontrol.wait` affects both performance and correctness.
 The placement of `griddepcontrol.launch_dependents` affects only the performance.
 
+### 2.2 Profiler Support
+
+[NVIDIA Nsight Systems](https://docs.nvidia.com/nsight-systems/UserGuide/index.html#) supports visualizing the PDL kernel overlap.
+
+![nsys](./nsys.png)
+
+I run [the demo code](https://github.com/Yang-YiFan/Yang-YiFan.github.io/tree/main/blogs/pdl/code) with nsys and got the figure above.
+You can clearly see with PDL enabled, the two kernels are overlapped.
+Without PDL, the two kernels are executed serially.
+
 ## 3. Distinctions with Megakernel
 
 Megakernel experts may ask this sounds so much similar to megakernel where you can programmatically control when each sub-kernel is launched to overlap with each other.
