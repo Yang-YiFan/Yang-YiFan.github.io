@@ -12,7 +12,7 @@ inline void gpuAssert2(cudaError_t code, const char *file, int line, bool abort=
 __global__ void delay_kernel() {
     uint64_t timeout = 1000000000ULL; // 10e9 cycles, ~0.5s
 
-    // prolog
+    // prolog, will be overlapped with the previous kernel's mainloop2
     auto start = clock64();
     while (clock64() - start < timeout);
 
@@ -24,7 +24,7 @@ __global__ void delay_kernel() {
 
     asm volatile("griddepcontrol.launch_dependents;"); // launch the next kernel here
 
-    // mainloop2
+    // mainloop2, will be overlapped with the next kernel's prolog
     start = clock64();
     while (clock64() - start < timeout);
 }
@@ -46,45 +46,48 @@ void launch_delay_kernel(cudaStream_t stream, bool pdl) {
 
     // launch the kernel
     cudaLaunchKernelEx(&config, delay_kernel);
-} 
+}
 
-int main() {
-    cudaStream_t stream;
-    gpuErrChk(cudaStreamCreate(&stream));
-
+float benchmark_pdl(cudaStream_t stream, bool pdl) {
     // Create CUDA events for timing
     cudaEvent_t start, stop;
     gpuErrChk(cudaEventCreate(&start));
     gpuErrChk(cudaEventCreate(&stop));
 
+    // Record start time and launch kernels
+    gpuErrChk(cudaEventRecord(start, stream));
+    
+    launch_delay_kernel(stream, pdl);  // First kernel
+    launch_delay_kernel(stream, pdl);  // Second kernel
+    
+    gpuErrChk(cudaEventRecord(stop, stream));
+    gpuErrChk(cudaEventSynchronize(stop));
+    
+    // Calculate elapsed time
+    float elapsed_time;
+    gpuErrChk(cudaEventElapsedTime(&elapsed_time, start, stop));
+    
+    // Cleanup events
+    gpuErrChk(cudaEventDestroy(start));
+    gpuErrChk(cudaEventDestroy(stop));
+    
+    return elapsed_time;
+}
+
+int main() {
+    cudaStream_t stream;
+    gpuErrChk(cudaStreamCreate(&stream));
+
     std::cout << "Testing PDL (Programmatic Dependent Launch) performance...\n\n";
 
     // Test with PDL enabled
     std::cout << "Launching two kernels with PDL enabled...\n";
-    gpuErrChk(cudaEventRecord(start, stream));
-    
-    launch_delay_kernel(stream, true);  // First kernel with PDL
-    launch_delay_kernel(stream, true);  // Second kernel with PDL
-    
-    gpuErrChk(cudaEventRecord(stop, stream));
-    gpuErrChk(cudaEventSynchronize(stop));
-    
-    float pdl_time;
-    gpuErrChk(cudaEventElapsedTime(&pdl_time, start, stop));
+    float pdl_time = benchmark_pdl(stream, true);
     std::cout << "Time with PDL: " << pdl_time << " ms\n\n";
 
     // Test with PDL disabled
     std::cout << "Launching two kernels with PDL disabled...\n";
-    gpuErrChk(cudaEventRecord(start, stream));
-    
-    launch_delay_kernel(stream, false);  // First kernel without PDL
-    launch_delay_kernel(stream, false);  // Second kernel without PDL
-    
-    gpuErrChk(cudaEventRecord(stop, stream));
-    gpuErrChk(cudaEventSynchronize(stop));
-    
-    float no_pdl_time;
-    gpuErrChk(cudaEventElapsedTime(&no_pdl_time, start, stop));
+    float no_pdl_time = benchmark_pdl(stream, false);
     std::cout << "Time without PDL: " << no_pdl_time << " ms\n\n";
 
     // Print comparison
@@ -95,8 +98,6 @@ int main() {
     std::cout << "Speedup:      " << (no_pdl_time / pdl_time) << "x\n";
 
     // Cleanup
-    gpuErrChk(cudaEventDestroy(start));
-    gpuErrChk(cudaEventDestroy(stop));
     gpuErrChk(cudaStreamDestroy(stream));
 
     return 0;
