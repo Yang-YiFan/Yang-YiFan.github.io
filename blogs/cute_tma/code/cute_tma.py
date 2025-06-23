@@ -24,7 +24,7 @@ def cute_tma_load_kernel(tma_load: cute.CopyAtom, tma_tensor: cute.Tensor, gmem_
     tma_load_mbar = smem.allocate_array(cutlass.Int64)
 
     # initialize the barrier and set arrival count to 1
-    # the initial phase is 1
+    # the initial phase is 0
     with cute.arch.elect_one():
         cute.arch.mbarrier_init_arrive_cnt(tma_load_mbar, 1)
 
@@ -32,7 +32,7 @@ def cute_tma_load_kernel(tma_load: cute.CopyAtom, tma_tensor: cute.Tensor, gmem_
     cute.arch.mbarrier_init_fence()
     cute.arch.barrier()
 
-    expected_phase = 0
+    current_phase = 0
     for k in range(K // CTA_K):
         #with cute.arch.elect_one():
         #    if block_idx == 1:
@@ -56,14 +56,14 @@ def cute_tma_load_kernel(tma_load: cute.CopyAtom, tma_tensor: cute.Tensor, gmem_
 
         cute.copy(tma_load, tAgA, tAsA, tma_bar_ptr = tma_load_mbar, mcast_mask = None)
 
-        # wait for the phase to flip, i.e. the arrival of all data
-        cute.arch.mbarrier_wait(tma_load_mbar, expected_phase)
+        # wait for the current phase to flip, i.e. the arrival of all data
+        cute.arch.mbarrier_wait(tma_load_mbar, current_phase)
         #with cute.arch.elect_one():
         #    if block_idx == 1:
         #        cute.print_tensor(sA)
 
         # phase is flipped between 0 and 1
-        expected_phase = 1- expected_phase
+        current_phase = 1- current_phase
 
 @cute.jit
 def cute_host_load(a: cute.Tensor):
