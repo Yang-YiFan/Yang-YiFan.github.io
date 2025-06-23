@@ -6,7 +6,7 @@ layout: default
 
 *Disclaimer: The content of this blog reflects my personal experiences and opinions while learning GPU programming in my own time. All information presented is publicly available and does not represent the views or positions of NVIDIA Corporation or any of its affiliates.*
 
-## Introduction
+## 0. Introduction
 
 There are many ways to reduce the end-to-end latency of neural network computation (training/inference/etc.). Some of the notable ones are:
 
@@ -20,7 +20,7 @@ In this blog, we focus on introducing the lesser known PDL, which is a relativel
 Importantly, it works on a stream of **dependent** kernels, which is a common pattern in neural network training and inference.
 If the kernels are independent, you should use multi-stream instead.
 
-## What is PDL?
+## 1. What is PDL?
 
 **[Programmatic Dependent Launch (PDL)](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#programmatic-dependent-launch-and-synchronization)** is a hardware feature that is introduced in the Hopper architecture.
 It allows dependent kernels in the same stream to overlap with each other.
@@ -41,7 +41,7 @@ Each FC layer is basically a gemm kernel. The latency of a gemm threadblock can 
 - Mainloop: The kernel loads the weights and activations and performs the gemm computation. And then it stores the output activation to global memory. **Importantly, the mainloop depends on the previous kernel's output.**
 - Grid-ending membar: A global memory barrier (membar) is issued at the end of the threadblock to make sure that the threadblock's output is visible globally (i.e. committed to global memory). Therefore, the next dependent kernel can read the correct data.
 
-The prolog/mainloop are what the user write in a kernel. The threadblock launch overhead and grid-ending membar are the associated hardware overhead when executing every kernel.
+The prolog/mainloop (in orange) are what the user write in a kernel. The threadblock launch overhead and grid-ending membar (in green) are the associated hardware overhead when executing every kernel.
 
 Without PDL, the latency of running FC1+FC2 is `FC1 launch overhead + FC1 prolog + FC1 mainloop + FC1 grid-ending membar + FC2 launch overhead + FC2 prolog + FC2 mainloop + FC2 grid-ending membar`. FC2 is only launched after FC1's grid-ending membar completes, meaning FC1's output is visible in global memory, as well as to FC2.
 
@@ -50,7 +50,7 @@ But notice that FC2's launch overhead and prolog are not *dependent* on the resu
 The critical path latency shaves off `FC2 launch overhead` and `FC2 prolog` from the baseline latency. 
 And PDL enables you reach the critical path latency by overlapping the execution of FC1's mainloop and grid-ending membar with FC2's launch time and prolog.
 
-### PDL's ISA and Hardware Support
+### 1.1 PDL's ISA and Hardware Support
 
 Two [ptx instructions](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-griddepcontrol) are exposed to make PDL work:
 
@@ -70,7 +70,7 @@ Then FC2's mainloop executes until the end of the kernel.
 One final thing to note is that each threadblock in FC1 will issue a `griddepcontrol.launch_dependents` instruction.
 Only after the `griddepcontrol.launch_dependents` of the **last** threadblock in FC1 is issued, the hardware will launch FC2.
 
-### What if I `griddepcontrol.launch_dependents` the next kernel too late/too early in FC1?
+### 1.2 What if I `griddepcontrol.launch_dependents` the next kernel too late/too early in FC1?
 
 Basically by inserting `griddepcontrol.launch_dependents` and `griddepcontrol.wait` manually in the kernel, the user controls the overlapping ratio between the two kernels.
 And the user also is responsible for handling the data synchronization between the two kernels by placing `griddepcontrol.wait` correctly.
@@ -84,7 +84,7 @@ The PDL benefits are reduced.
 
 If you place `griddepcontrol.launch_dependents` too early (the most extreme case is at the start of FC1), then FC2's prolog will finish very early. And it's mainloop will be blocked by `griddepcontrol.wait` because FC1 has not yet finished its execution to produce the output. The other concern would be FC2's prolog will interfere with FC1's mainloop execution, potentially slowing it down.
 
-## How to use PDL?
+## 2. How to use PDL?
 
 Many important programming languages and frameworks already support PDL:
 
@@ -128,7 +128,7 @@ int main() {
 }
 ```
 
-### Conditions for PDL to be Functional
+### 2.1 Conditions for PDL to be Functional
 
 In order for the PDL kernel overlap to be functional, the following conditions need to be met:
 1. The current kernel has `griddepcontrol.wait` correctly placed to ensure correct synchronization with the previous kernel. (If the current kernel doesn't have data dependency with the previous kernel, you can just remove the `griddepcontrol.wait`).
@@ -139,7 +139,7 @@ In order for the PDL kernel overlap to be functional, the following conditions n
 Therefore, the placement of `griddepcontrol.wait` affects both performance and correctness.
 The placement of `griddepcontrol.launch_dependents` affects only the performance.
 
-## Distinctions with Megakernel
+## 3. Distinctions with Megakernel
 
 Megakernel experts may ask this sounds so much similar to megakernel where you can programmatically control when each sub-kernel is launched to overlap with each other.
 Yes, indeed it's similar on that aspect.
@@ -151,7 +151,7 @@ But the most important distinction in my opinion is how the two dependent kernel
 
 All these approaches are a trade-off between lower latency and flexibility. The hardware synchronization is the most efficient but least flexible. The software synchronization is the most flexible but least efficient. 
 
-## Summary
+## 4. Summary
 
 In this blog, we introduced PDL, a technique to reduce the end-to-end latency of neural network computation.
 - PDL allows overlapped execution of dependent kernels in the same stream to eliminate unnecessary serialization.
