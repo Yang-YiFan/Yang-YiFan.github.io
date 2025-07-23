@@ -4,7 +4,7 @@
 
 CUDA and Cutlass are required to build the c++ code.
 
-CuTe DSL is required to run the python code.
+CuTe DSL >= 4.1.0 is required to run the python code.
 
 Works on Hopper (sm_90a) and Blackwell (sm_100a).
 

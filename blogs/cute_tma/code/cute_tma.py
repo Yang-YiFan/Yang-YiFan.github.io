@@ -26,7 +26,7 @@ def cute_tma_load_kernel(tma_load: cute.CopyAtom, tma_tensor: cute.Tensor, gmem_
     # initialize the barrier and set arrival count to 1
     # the initial phase is 0
     with cute.arch.elect_one():
-        cute.arch.mbarrier_init_arrive_cnt(tma_load_mbar, 1)
+        cute.arch.mbarrier_init(tma_load_mbar, 1)
 
     # barrier init fence to ensure barrier is visible to all threads
     cute.arch.mbarrier_init_fence()
@@ -43,7 +43,7 @@ def cute_tma_load_kernel(tma_load: cute.CopyAtom, tma_tensor: cute.Tensor, gmem_
 
         # set the expected bytes to be loaded
         with cute.arch.elect_one():
-            cute.arch.mbarrier_init_tx_bytes(tma_load_mbar, bytes)
+            cute.arch.mbarrier_arrive_and_expect_tx(tma_load_mbar, bytes)
 
         # cta_layout and cta_coord represents the cta coord in a cga, setting cta_layout to 1 means we use 1x1 cga
         # tma partition only partition the first mode of smem/gmem tensor into various utmaldg instructions
@@ -85,7 +85,7 @@ def cute_host_load(a: cute.Tensor):
     # which represents non swizzle
     smem_layout = cute.make_composed_layout(cute.make_swizzle(0,4,3), 0, smem_layout)
     # tma_tensor is the arithmetic tuple tracking the coordinate of the gmem tensor to load from
-    tma_load, tma_tensor = cpasync.make_tma_tile_atom(cpasync.CopyBulkTensorTileG2SOp(), gmem_tensor, smem_layout, smem_layout.shape)
+    tma_load, tma_tensor = cpasync.make_tiled_tma_atom(cpasync.CopyBulkTensorTileG2SOp(), gmem_tensor, smem_layout, smem_layout.shape)
 
     # need to explicitly calculate smem usage to pass in to kernel launch
     bytes = cute.size_in_bytes(gmem_tensor.element_type, smem_layout) + 8
