@@ -10,7 +10,7 @@ layout: default
 
 In this blog, I will introduce my understanding/interpretation of CuTe layout and tensor.
 It assumes some basic understanding of CuTe layout and tensor.
-You can refer to [the additional references in Sec. 8](#8-additional-references) for the basic introduction of CuTe layout and tensor.
+You can refer to [the additional references in Sec. 9](#9-additional-references) for the basic introduction of CuTe layout and tensor.
 The demo code of the operations mentioned in this blog can be found [here](https://github.com/Yang-YiFan/Yang-YiFan.github.io/tree/main/blogs/cute_layout/code).
 
 A CuTe layout is a mapping from tensor coordinate to physical index/address in memory.
@@ -252,7 +252,46 @@ Normally dynamic integer is interchangeable with static integer, with two "excep
 1. Use static integers whenever possible, it is an optimization and enables other portions of code to analyze and prove their sections better. For example, the entire TMA descriptor, partitioning, certain TMA invariants due to arch, etc. can only takes certain shape of tensor tile. So it's good to have those shape to be static/compile tile so compiler can reason about whether it can be implemented on the target arch or not. MMA is similar.
 2. Rule of thumb: RMEM/SMEM/TMEM is always a static layout.
 
-## 7. Summary
+## 7. PyTorch Tensor Layout in CuTe Terminology
+
+Dealing with tensor layout is one of the most nasty things in PyTorch. But thanks to CuTe, all the PyTorch tensor can be unambiguously/cleanly represented.
+
+### 7.1 Tensor Creation
+
+By default, if you create a new multi-dimensional tensor in PyTorch, it will be a `RowMajor` layout in PyTorch terminology. This means the tensor will have a `LayoutRight` stride, meaning the last dimension is the fastest changing/contiguous dimension. And the first dimension is the slowest changing dimension.
+
+```python
+A = torch.randn(M, N, K)
+# layout of A is (M, N, K) : (K * N, K, 1)
+```
+
+### 7.2 Transpose/Permute
+
+Transpose/Permute only changes the `Shape` of the tensor, it doesn't change the underlying storage, which means the `Stride` of each mode remains unchanged. Another way to put it is it changes the coordinate space of the tensor, it's still the same tensor but you index into it differently.
+
+```python
+A = torch.randn(M, N)
+# layout of A is (M, N) : (N, 1), i.e. row major
+# i.e. A(m, n) = storage[m * N + n]
+B = A.T
+# layout of B is (N, M) : (1, N), i.e. column major
+# i.e. B(n, m) = storage[n + m * N]
+```
+
+### 7.3 Contiguous
+
+Contiguous changes the storage of the tensor, it forces the current tensor to be `LayoutRight`. This means if the current tensor doesn't have `LayoutRight`, there will be a new tensor created with the same `Shape` but with `LayoutRight` stride. It involves copying the data from the original tensor to the new tensor.
+
+```python
+A = torch.randn(M, N)
+# layout of A is (M, N) : (1, M), i.e. column major
+# i.e. A(m, n) = storage[m + n * M]
+B = A.contiguous()
+# layout of B is (M, N) : (N, 1), i.e. row major
+# i.e. B(m, n) = new_storage[m * N + n]
+```
+
+## 8. Summary
 
 In this blog, we covered the basics of CuTe layout and some common operations on CuTe tensor:
 - A layout consists of `Shape` and `Stride`.
@@ -261,10 +300,11 @@ In this blog, we covered the basics of CuTe layout and some common operations on
 - Blocked product stacks a tensor along multiple dimensions.
 - Local tile is a way to partition a tensor into smaller sub-tiles.
 - Static integer is a compile time constant and dynamic integer is a runtime variable.
+- How various PyTorch tensor operations are represented in CuTe terminology.
 
 We will explore more advanced topics such as composition, TV layout, swizzle, etc. in future blogs.
 
-## 8. Additional References
+## 9. Additional References
 
 - [CuTe doc 01_layout](https://github.com/NVIDIA/cutlass/blob/main/media/docs/cpp/cute/01_layout.md)
 - [CuTe doc 02_layout_algebra](https://github.com/NVIDIA/cutlass/blob/main/media/docs/cpp/cute/02_layout_algebra.md)
