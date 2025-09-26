@@ -17,6 +17,7 @@ I plan to write blogs during my process of learning CUDA/Cutlass/Cute/Triton pro
 - ### [How to Make a Compute-bound Problem Actually Compute-bound](./blogs/reg_tile/reg_tile.md)
 - ### [CuTe Layout and Tensor](./blogs/cute_layout/cute_layout.md)
 - ### [Using Programmatic Dependent Launch (PDL) to Reduce End-to-End Latency](./blogs/pdl/pdl.md)
+- ### [Tensor Core MMA Swizzle Layout](./blogs/mma_swizzle/mma_swizzle.md)
 
 # Publications
 
