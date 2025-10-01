@@ -144,9 +144,9 @@ There are roughly 8 legal smem `swizzle layout` that the `ldmatrix`/tensor core 
 - MN-Major Swizzle 64B ([Sec. 3.2.3](#323-mn-major-swizzle-64b)) ([CuTe definition](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/atom/mma_traits_sm90_gmma.hpp#L92))
 - MN-Major Swizzle 128B ([Sec. 3.2.4](#324-mn-major-swizzle-128b)) ([CuTe definition](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/atom/mma_traits_sm90_gmma.hpp#L94))
 
-Importantly, swizzling doesn't change the major-ness of the input tile, i.e. if the tile in gmem is K-major (K dimension is the contiguous dimension), the smem tile will still be *roughly* K-major after swizzling.
+Importantly, **swizzling doesn't change the major-ness of the input tile**, i.e. if the tile in gmem is K-major (K dimension is the contiguous dimension), the smem tile will still be *roughly* K-major after swizzling.
 No transpose happens during gmem to smem copy.
-Transpose happens during smem to RF copy (i.e. `ldmatrix`).
+Transpose happens during smem to RF copy (i.e. `ldmatrix`) (more about this in [Sec. 6](#6-how-transposed-input-is-handled)).
 So if the gmem tile is MN-major, you should choose the MN-major swizzle layout for smem.
 
 [Section 9.7.16.10.6. Shared Memory Layout and Swizzling of PTX 9.0 doc](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-shared-memory-layout-swizzling) best describes all these swizzle layout.
@@ -420,7 +420,43 @@ You can read more about bank conflict free matrix transpose in [Lei Mao's blog](
 
 ## 7. Swizzle Atom Layout
 
+So far we've mostly looked at small tile sizes that contains only 1 or a few swizzle atoms.
+The natural next question is what's the layout of the swizzle atom when the tile size is larger than the swizzle atom size?
+Below we show an example of a `M=16, K=64B` (or K=32 assuming bf16 input) K-major tile and how different swizzle atoms can be laid out to form the tile.
+
 ![swizzle_atom_layout](./figures/swizzle_atom_layout.png)
 
-## 8. Summary
+The `16x64B` tile contains 8 `swizzle none` atoms.
+These atoms are laid out in a 2x4 grid as shown on the left.
+But the atom layout can be row-major (top) or column-major (bottom).
+For row-major atom layout, the atoms in the same row are contiguous in smem (e.g. atom 0, 1, 2, 3).
+For the column-major atom layout, the atoms in the same column are contiguous in smem (e.g. atom 0, 4).
+
+Similarly, the `16x64B` tile contains 4 `swizzle 32B` atoms.
+You can also lay out the atoms in a 2x2 grid in both row-major and column-major layout (middle of the figure).
+That renders different atom contiguity patterns in smem.
+
+As a kernel author, you should be able to use any of the swizzle atom layout and get the correct result.
+CuTe should abstract away the different address calculation for different swizzle atom layouts.
+
+### 8. What about Hopper and Blackwell?
+
+So far we've only talked about Ampere mma and hopefully I convinced you the combination of swizzle layout and `ldmatrix` feeds the correct data to the Ampere tensor core.
+
+Hopper and Blackwell mma can source input directly from smem with no `ldmatrix` involved.
+How do they understand the different swizzle atom and swizzle atom layouts?
+These information is encoded in the smem matrix descriptor (that CuTe can build for you automatically too).
+You can refer to [Hopper mma matrix descriptor](https://docs.nvidia.com/cuda/parallel-thread-execution/#asynchronous-warpgroup-level-matrix-shared-memory-layout-matrix-descriptor) and [Blackwell mma matrix descriptor](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-matrix-descriptors) for more details.
+Soon I'll cover the blackwell part in more details in a separate blog using a [low-latency optimized blackwell GEMM kernel](https://github.com/flashinfer-ai/flashinfer/blob/main/include/flashinfer/gemm/tgv_gemm.cuh) I wrote and open sourced in FlashInfer.
+Stay tuned :)
+
+## 9. Summary
+
+In this blog I covered mostly what you need to know about mma swizzle layout:
+- The 8 legal mma swizzle layouts and their specifications
+- Swizzle layout makes sure when the tile is copied from gmem to smem and read out from smem (`8x16B` or `16x8B`), there is no smem bank conflicts
+- Swizzling doesn't change the major-ness of the input tile when loading from gmem to smem, it only changes how the 16B chunk are laid out in smem
+- Maximizing swizzle atom size improves gmem access efficiency (longer contiguous loads)
+- Transpose happens during smem->RF copy of `ldmatrix` and is not handled by swizzle layout
+- Swizzle atom layout in smem can be arbitrary and should always yield the correct result
 
