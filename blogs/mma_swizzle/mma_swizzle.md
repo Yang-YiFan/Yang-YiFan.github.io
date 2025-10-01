@@ -47,7 +47,7 @@ And the tensor core has layout requirement on the data in smem, i.e. `swizzle la
 To make our life easier, in this blog we focus on how to write a correct MMA kernel for Ampere tensor core (using `mma` ptx instructions).
 The general idea and specification of the swizzle layout should be the same for hopper and Blackwell tensor cores too.
 
-The mma instruction we pick is [`mma.sync.aligned.m16n8k8.row.col.f32.bf16.bf16.f32`](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma) which does `D = A * B + C` where `A` is bf16 `[M, K]` (row major) and `B` is bf16 `[K, N]` (column major) and `C/D` is f32 `[M, N]` and `M = 16, N = 8, K = 8`.
+The mma instruction we pick is [mma.sync.aligned.m16n8k8.row.col.f32.bf16.bf16.f32](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma) which does `D = A * B + C` where `A` is bf16 `[M, K]` (row major) and `B` is bf16 `[K, N]` (column major) and `C/D` is f32 `[M, N]` and `M = 16, N = 8, K = 8`.
 The mma instruction expects both the input and output in the RF (rmem). 
 We call the per thread register storing the input/output matrix `fragment`.
 Below is the matrix A fragment ([Figure 71 of PTX 9.0 doc](https://docs.nvidia.com/cuda/parallel-thread-execution/#mma-1688-a-f16)) of this mma instruction.
@@ -55,8 +55,8 @@ Below is the matrix A fragment ([Figure 71 of PTX 9.0 doc](https://docs.nvidia.c
 ![mma_a_frag](./figures/mma_a_frag.png)
 
 The A tile is `[16, 8]` and stored in 32 threads, each thread stores 4 elements of the A tile.
-The way we load the bf16 A tile from smem into RF is via the [`ldmatrix.m8n8.x1.b16`](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-ldmatrix) instruction.
-Each call to `ldmatrix` will load a `[8, 8]` (or a `8x16B`) subtile from smem into RF.
+The way we load the bf16 A tile from smem into RF is via the [ldmatrix.m8n8.x1.b16](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-ldmatrix) instruction.
+Each call to `ldmatrix` will load a `M=8, K=8` (or a `8x16B`) subtile from smem into RF.
 So the grey color denotes the `8x16B` data loaded by the first `ldmatrix` instruction (2 elements per thread) and the red color denotes the data loaded by the second `ldmatrix` instruction (2 elements per thread).
 [Figure 104 of PTX 9.0 doc](https://docs.nvidia.com/cuda/parallel-thread-execution/#mma-ldmatrix-fragments) describes the data layout in the RF after the `ldmatrix` instruction, which is exactly what we draw above for the grey and red subtile.
 
@@ -68,8 +68,8 @@ And we will show below how each and every one of the `swizzle layout` satisfies 
 
 Ultimately we will use the mma instruction through CuTe, so it might be good to understand the above layout in CuTe terminology.
 
-The mma atom of `mma.sync.aligned.m16n8k8.row.col.f32.bf16.bf16.f32` is [`SM80_16x8x8_F32BF16BF16F32_TN`](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/arch/mma_sm80.hpp#L191).
-We can draw the fragment layout by using [`print_svg`](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/util/print_svg.hpp#L230) function and will get the following figure.
+The mma atom of `mma.sync.aligned.m16n8k8.row.col.f32.bf16.bf16.f32` is [SM80_16x8x8_F32BF16BF16F32_TN](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/arch/mma_sm80.hpp#L191).
+We can draw the fragment layout by using [print_svg](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/util/print_svg.hpp#L230) function and will get the following figure.
 
 ![mma_layout](./figures/mma_layout.svg)
 
@@ -96,8 +96,8 @@ A((m0, m1), (n0, n1)) # natural coordinate of tensor
   = TV(m0 * 4 + m1 * 64 + n0 * 32 + n1)
 ```
 
-The actual `TV-layout` for A matrix fragment can be retrieved by inspecting the `ALayout` member of the [`MMA_Traits`](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/atom/mma_traits_sm80.hpp#L123) of the mma atom.
-In this particular case, the A TV-layout is [`SM80_16x8_Row`](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/atom/mma_traits_sm80.hpp#L53).
+The actual `TV-layout` (mapping from `(T, V)` to `(M, K)`) for A matrix fragment can be retrieved by inspecting the `ALayout` member of the [MMA_Traits](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/atom/mma_traits_sm80.hpp#L123) of the mma atom.
+In this particular case, the A TV-layout is [SM80_16x8_Row](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/atom/mma_traits_sm80.hpp#L53).
 The formula below shows how we validate the `TV-layout` is correct.
 
 ```bash
@@ -134,17 +134,81 @@ if __name__ == "__main__":
 
 ## 3. MMA Swizzle Layout
 
-I basically redraw all the figures from [9.7.16.10.6. Shared Memory Layout and Swizzling in PTX 9.0 doc](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-shared-memory-layout-swizzling) with more details and annotations of what's going on.
+There are roughly 8 legal smem `swizzle layout` that the `ldmatrix`/tensor core understands:
+- K-Major Swizzle None ([Sec. 3.1.1](#311-k-major-swizzle-none))
+- K-Major Swizzle 32B ([Sec. 3.1.2](#312-k-major-swizzle-32b))
+- K-Major Swizzle 64B ([Sec. 3.1.3](#313-k-major-swizzle-64b))
+- K-Major Swizzle 128B ([Sec. 3.1.4](#314-k-major-swizzle-128b))
+- MN-Major Swizzle None ([Sec. 3.2.1](#321-mn-major-swizzle-none))
+- MN-Major Swizzle 32B ([Sec. 3.2.2](#322-mn-major-swizzle-32b))
+- MN-Major Swizzle 64B ([Sec. 3.2.3](#323-mn-major-swizzle-64b))
+- MN-Major Swizzle 128B ([Sec. 3.2.4](#324-mn-major-swizzle-128b))
+
+Importantly, swizzling doesn't change the major-ness of the input tile, i.e. if the tile in gmem is K-major (K dimension is the contiguous dimension), the smem tile will still be *roughly* K-major after swizzling.
+No transpose happens during gmem to smem copy.
+Transpose happens during smem to RF copy (i.e. `ldmatrix`).
+So if the gmem tile is MN-major, you should choose the MN-major swizzle layout for smem.
+
+[Section 9.7.16.10.6. Shared Memory Layout and Swizzling of PTX 9.0 doc](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-shared-memory-layout-swizzling) best describes all these swizzle layout.
+I basically redraw all the figures with more details and annotations of what's going on.
 
 ### 3.1. K-Major Swizzle Layout
 
+If the gmem tile is K-major, you should choose the K-major swizzle layout for smem.
+
 #### 3.1.1. K-Major Swizzle None
+
+The first legal layout is called `Swizzle None` as illustrated below.
 
 ![swizzle_none_k](./figures/swizzle_none_k.png)
 
+A tile of `8x16B` (`M=8`, `K=16B` or `K=8` assuming bf16 input) in gmem is shown on the left with each row being a 16B chunk.
+In the figure, each grey block is a 16B chunk and the `8x16B` tile contains 8 chunks from chunk 0 to chunk 7.
+These 8 chunks (`8x16B`) forms what we call the `swizzle none atom`.
+
+The `swizzle none` layout specifies that the `swizzle none atom` is stored contiguously in smem with the chunk order shown on the right of the figure.
+In this case, chunk 0 is stored at the first 16B in smem, chunk 1 is stored at the second 16B in smem, and so on.
+Note that 8 chunks occupies 128B in smem which happens to match the 32 bank (4B/bank) organization of smem.
+This means chunk 0 resides in bank 0-3, chunk 1 resides in bank 4-7, and so on.
+
+Recall that the swizzle layout should serve the `8x16B` load pattern of `ldmatrix.m8n8` at full smem read bandwidth (128B/cycle).
+The `swizzle none` layout satisfies this requirement.
+It happens so that the `8x16B` subtile the `ldmatrix.m8n8` instruction loads is exactly 1 `swizzle none atom`.
+Since all 8 chunks are stored contiguously in smem, the `ldmatrix.m8n8` instruction can load all 8 chunks in 1 cycle without bank conflicts.
+
+Confusingly, `swizzle none` is not the intuitive linear smem layout you would expect because it mandates the `M=8, K=8 K major` subtile to be stored contiguously in smem.
+We will explain this more with a concrete example in [Sec. 4](#4-why-swizzle).
+
 #### 3.1.2. K-Major Swizzle 32B
 
+The swizzle atom becomes bigger with `swizzle 32B` layout.
+It now becomes a `8x32B` tile (`M=8`, `K=32B` or `K=16` assuming bf16 input).
+So now you can see the naming convention, `K-Major Swizzle 32B` implies the swizzle atom is a `8x32B` K-major tile.
+
 ![swizzle_32B_k](./figures/swizzle_32B_k.png)
+
+This swizzle 32B atom now contains 16 `16B` chunks or 2 `8x16B` (required by `ldmatrix.m8n8`) subtiles.
+The `swizzle 32B` layout specifies that the 16 `16B` chunks in the atom are stored contiguously in smem with the chunk order shown on the right of the figure.
+
+Running the same `ldmatrix.m8n8` instruction on this swizzle 32B layout, we want to load a subtile of `8x16B` at full smem read bandwidth (128B/cycle).
+The swizzle 32B layout contains 2 such subtiles, colored in grey and red.
+The grey subtile contains chunk 0, 2, 4, 6, 8, 10, 12, 14 and the red subtile contains chunk 1, 3, 5, 7, 9, 11, 13, 15.
+Because chunks are organized in that particular swizzle order in smem, from the figure we can see that loading the grey subtile from smem can be done in 1 cycle without bank conflicts.
+The same is true for the red subtile.
+So the `ldmatrix.m8n8` instruction can load both the grey and red subtiles in 1 cycle without bank conflicts.
+
+Finally, we introduce a new concept called `16B atomicity`.
+This is saying for a 16B chunk that is contiguous in gmem, it's also contiguous in smem after swizzling.
+Our `16B` chunk organization is exactly that. 
+Even though the chunk orders are swizzled in smem, the data within each chunk still remains contiguous.
+All swizzle layout by default uses `16B atomicity`.
+There are exceptions with `swizzle 128B` layout which could allow 32B/64B atomicity (i.e. chunk size is 32B/64B instead of 16B).
+But for simplicity we ignore them in this blog.
+
+Now you can kinda see why I stated earlier *swizzle doesn't change the major-ness of the input tile* because of this `16B atomicity` property.
+If the tile in gmem is K-major (K dimension is the contiguous dimension), the 16B chunk represents 8 K values are contiguous in both gmem and smem after swizzling.
+Similarly, if the tile in gmem is M-major (M dimension is the contiguous dimension), the 16B chunk represents 8 M values are contiguous in both gmem and smem after swizzling.
+Swizzle preserves atomicity and it only orders *at the 16B chunk granularity*.
 
 #### 3.1.3. K-Major Swizzle 64B
 
@@ -175,6 +239,9 @@ I basically redraw all the figures from [9.7.16.10.6. Shared Memory Layout and S
 ## 4. Why Swizzle?
 
 ![why_swizzle](./figures/why_swizzle.png)
+
+Confusingly, `swizzle none` is not the intuitive linear smem layout you would expect because it mandates the `M=8, K=8 K major` subtile to be stored contiguously in smem.
+This means if I have a `M=8, K=16 K-major` tile in gmem, when copying it to smem, the 16 K elements are not contiguous in smem.
 
 ## 5. Which Swizzle Atom to Choose?
 
