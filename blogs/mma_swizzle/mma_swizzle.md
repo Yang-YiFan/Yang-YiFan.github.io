@@ -295,7 +295,7 @@ So the `ldmatrix.m8n8` instruction can load both the grey and red subtiles in 1 
 
 The `swizzle none` layout can also avoid bank conflicts when `ldmatrix.m8n8` loads a `8x16B` subtile.
 But it requires the `M=8, K=8 K major` subtile to be stored contiguously in smem.
-Confusingly, this is different from the `smem linear layout` we mentioned above.
+*Confusingly*, this is different from the `smem linear layout` we mentioned above.
 Even though it's called `swizzle none`, it's not the intuitive linear smem layout you would expect.
 
 ## 5. Which Swizzle Atom to Choose?
@@ -366,11 +366,56 @@ The above rule is exactly what's implemented in Cutlass [sm100_smem_selector](ht
 
 ## 6. How Transposed Input is Handled?
 
+According to the [ptx specification](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-instructions-mma) of `mma.sync.aligned.m16n8k8.row.col.f32.bf16.bf16.f32` instruction, the A matrix (`[M, K]`) is row major (K-major) and the B matrix (`[K, N]`) is column major (K-major).
+What will happen if my A matrix is M-major in gmem?
+Where does the transpose of A happen before being fed into the tensor core?
+The answer is that `ldmatrix` will do the optional transpose (i.e. the `trans` suffix) of A before feeding it into the tensor core, the swizzling layout is irrelevant here.
+
+Let's first understand how non-transposed (K-major) A matrix is handled.
+The input tile size for the bf16 `mma.m16n8k8` is `M=16, K=8 or K=16B` as shown on the left.
+Because tile K is only 16B, we use `K-major swizzle none` layout for smem and this tile contains 2 `swizzle none` atoms.
+Each `ldmatrix.m8n8` instruction will load a `8x16B` subtile from smem into RF.
+The first load is to the grey chunks 0, 1, 2, 3, 4, 5, 6, 7 and the register fragment value is shown at the bottom right.
+For example, thread 0 (T0) will hold `M0K0, M0K1, M0K2, M0K3`. 
+T22 will hold `M5K4, M5K5, M5K6, M5K7`.
+This is exactly what the mma instruction expects the input fragment layout to be (as draw in [Sec. 2.1](#21-motivating-example-ampere-mma)).
+
 ![mma_k_major](./figures/mma_k_major.png)
+
+Now let's see how M-major A matrix is handled.
+The input tile size for the bf16 `mma.m16n8k8` is still `M=32B or M=16, K=8` as shown on the left.
+Because tile M is 32B, we use `M-major swizzle 32B` layout for smem and this tile contains 1 `swizzle 32B` atoms.
+If we do nothing, each `ldmatrix.m8n8` instruction will load a `16Bx8` subtile from smem into RF.
+The first load is to the grey chunks 0, 2, 4, 6, 8, 10, 12, 14 and the register fragment value is shown at the bottom left.
+Then T0 holds `M0K0, M1K0, M2K0, M3K0`.
+T22 holds `M4K5, M5K5, M6K5, M7K5`.
+This is not what the mma instruction expects the input fragment layout to be, it's the transpose of the required layout.
 
 ![mma_m_major](./figures/mma_m_major.png)
 
-slightly different than swizzle used to do matrix transpose
+So here comes `ldmatrix.m8n8.trans` that transposes the `16Bx8` tile during smem->RF copy.
+If we use the transpose version of `ldmatrix`, the first load is still going to be the grey chunks 0, 2, 4, 6, 8, 10, 12, 14 and the register fragment value is shown at the bottom right.
+Now T0 holds `M0K0, M1K0, M2K0, M3K0`.
+T22 holds `M4K5, M5K5, M6K5, M7K5`.
+This is exactly what the mma instruction expects the input fragment layout to be.
+
+To summarize, if the input is MN-major in smem/gmem, `ldmatrix` will do the optional transpose (i.e. the `trans` suffix) of input such that the input values in RF are in the required K-major layout.
+
+### 6.1. Difference with Bank Conflict Free Matrix Transpose
+
+Again very *confusingly*, you may hear before one can use swizzling to do bank conflict free matrix transpose.
+But here I tell you the transpose happens during the smem->RF copy of `ldmatrix` and has nothing to do with smem swizzle layout.
+Unfortunately both statements are true (that's why it's so confusing!).
+
+The mma swizzle layout has 16B atomicity (32B/64B atomicity in corner cases we won't cover).
+The swizzle layout required to do bank conflict free matrix transpose is normally 4B atomicity (assuming fp32 input).
+So they are both swizzle layout but with different atomicity/configuration.
+
+But the spirit is the same, take `K-major swizzle 64B` as an example, it allows bank conflict free access to both `2x64B` (needed for `st.shared` during gmem->smem copy) and `8x16B` (needed for `ldmatrix.m8n8` during smem->RF copy) subtiles of a larger `8x64B` tile/atom.
+For matrix transpose, the swizzle layout allows bank conflict free access to a row (`1x128B`) or a column (`32x4B`) of the input matrix tile.
+Swizzle layout allows bank conflict free access to subtiles of two different shapes.
+
+You can read more about bank conflict free matrix transpose in [Lei Mao's blog](https://leimao.github.io/article/CuTe-Matrix-Transpose/) or [Colfax research's blog](https://research.colfax-intl.com/tutorial-matrix-transpose-in-cutlass/).
 
 
 ## 7. Swizzle Atom Layout
