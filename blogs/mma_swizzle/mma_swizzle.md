@@ -135,14 +135,14 @@ if __name__ == "__main__":
 ## 3. MMA Swizzle Layout
 
 There are roughly 8 legal smem `swizzle layout` that the `ldmatrix`/tensor core understands:
-- K-Major Swizzle None ([Sec. 3.1.1](#311-k-major-swizzle-none))
-- K-Major Swizzle 32B ([Sec. 3.1.2](#312-k-major-swizzle-32b))
-- K-Major Swizzle 64B ([Sec. 3.1.3](#313-k-major-swizzle-64b))
-- K-Major Swizzle 128B ([Sec. 3.1.4](#314-k-major-swizzle-128b))
-- MN-Major Swizzle None ([Sec. 3.2.1](#321-mn-major-swizzle-none))
-- MN-Major Swizzle 32B ([Sec. 3.2.2](#322-mn-major-swizzle-32b))
-- MN-Major Swizzle 64B ([Sec. 3.2.3](#323-mn-major-swizzle-64b))
-- MN-Major Swizzle 128B ([Sec. 3.2.4](#324-mn-major-swizzle-128b))
+- K-Major Swizzle None ([Sec. 3.1.1](#311-k-major-swizzle-none)) ([CuTe definition](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/atom/mma_traits_sm90_gmma.hpp#L98))
+- K-Major Swizzle 32B ([Sec. 3.1.2](#312-k-major-swizzle-32b)) ([CuTe definition](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/atom/mma_traits_sm90_gmma.hpp#L100))
+- K-Major Swizzle 64B ([Sec. 3.1.3](#313-k-major-swizzle-64b)) ([CuTe definition](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/atom/mma_traits_sm90_gmma.hpp#L102))
+- K-Major Swizzle 128B ([Sec. 3.1.4](#314-k-major-swizzle-128b)) ([CuTe definition](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/atom/mma_traits_sm90_gmma.hpp#L104))
+- MN-Major Swizzle None ([Sec. 3.2.1](#321-mn-major-swizzle-none)) ([CuTe definition](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/atom/mma_traits_sm90_gmma.hpp#L88))
+- MN-Major Swizzle 32B ([Sec. 3.2.2](#322-mn-major-swizzle-32b)) ([CuTe definition](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/atom/mma_traits_sm90_gmma.hpp#L90))
+- MN-Major Swizzle 64B ([Sec. 3.2.3](#323-mn-major-swizzle-64b)) ([CuTe definition](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/atom/mma_traits_sm90_gmma.hpp#L92))
+- MN-Major Swizzle 128B ([Sec. 3.2.4](#324-mn-major-swizzle-128b)) ([CuTe definition](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/atom/mma_traits_sm90_gmma.hpp#L94))
 
 Importantly, swizzling doesn't change the major-ness of the input tile, i.e. if the tile in gmem is K-major (K dimension is the contiguous dimension), the smem tile will still be *roughly* K-major after swizzling.
 No transpose happens during gmem to smem copy.
@@ -163,7 +163,7 @@ The first legal layout is called `Swizzle None` as illustrated below.
 ![swizzle_none_k](./figures/swizzle_none_k.png)
 
 A tile of `8x16B` (`M=8`, `K=16B` or `K=8` assuming bf16 input) in gmem is shown on the left with each row being a 16B chunk.
-In the figure, each grey block is a 16B chunk and the `8x16B` tile contains 8 chunks from chunk 0 to chunk 7.
+In the figure, each grey block is a `1x16B` chunk (containing 8 K values) and the `8x16B` tile contains 8 chunks from chunk 0 to chunk 7.
 These 8 chunks (`8x16B`) forms what we call the `swizzle none atom`.
 
 The `swizzle none` layout specifies that the `swizzle none atom` is stored contiguously in smem with the chunk order shown on the right of the figure.
@@ -175,6 +175,7 @@ Recall that the swizzle layout should serve the `8x16B` load pattern of `ldmatri
 The `swizzle none` layout satisfies this requirement.
 It happens so that the `8x16B` subtile the `ldmatrix.m8n8` instruction loads is exactly 1 `swizzle none atom`.
 Since all 8 chunks are stored contiguously in smem, the `ldmatrix.m8n8` instruction can load all 8 chunks in 1 cycle without bank conflicts.
+And the `8x16B` subtile is K-major.
 
 Confusingly, `swizzle none` is not the intuitive linear smem layout you would expect because it mandates the `M=8, K=8 K major` subtile to be stored contiguously in smem.
 We will explain this more with a concrete example in [Sec. 4](#4-why-swizzle).
@@ -187,8 +188,8 @@ So now you can see the naming convention, `K-Major Swizzle 32B` implies the swiz
 
 ![swizzle_32B_k](./figures/swizzle_32B_k.png)
 
-This swizzle 32B atom now contains 16 `16B` chunks or 2 `8x16B` (required by `ldmatrix.m8n8`) subtiles.
-The `swizzle 32B` layout specifies that the 16 `16B` chunks in the atom are stored contiguously in smem with the chunk order shown on the right of the figure.
+This swizzle 32B atom now contains 16 `1x16B` chunks or 2 `8x16B` (required by `ldmatrix.m8n8`) subtiles.
+The `swizzle 32B` layout specifies that the 16 `1x16B` chunks in the atom are stored contiguously in smem with the chunk order shown on the right of the figure.
 
 Running the same `ldmatrix.m8n8` instruction on this swizzle 32B layout, we want to load a subtile of `8x16B` at full smem read bandwidth (128B/cycle).
 The swizzle 32B layout contains 2 such subtiles, colored in grey and red.
@@ -212,36 +213,89 @@ Swizzle preserves atomicity and it only orders *at the 16B chunk granularity*.
 
 #### 3.1.3. K-Major Swizzle 64B
 
+Same deal except this time the swizzle atom becomes a `8x64B` tile (`M=8`, `K=64B` or `K=32` assuming bf16 input).
+The swizzle 64B atom now contains 32 `1x16B` chunks or 4 `8x16B` (required by `ldmatrix.m8n8`) subtiles (colored in grey, red, purple, and blue).
+The chunk order shown on the right makes sure `ldmatrix.m8n8` can read each colored `8x16B` subtile in 1 cycle without bank conflicts.
+
 ![swizzle_64B_k](./figures/swizzle_64B_k.png)
 
 #### 3.1.4. K-Major Swizzle 128B
+
+Swizzle 128B is the most commonly used swizzle layout and we will explain the reason in [Sec. 5](#5-which-swizzle-atom-to-choose).
+
+Same deal again, the swizzle atom becomes a `8x128B` tile (`M=8`, `K=128B` or `K=64` assuming bf16 input).
+And each `8x16B` subtile can be loaded from smem in 1 cycle without bank conflicts.
 
 ![swizzle_128B_k](./figures/swizzle_128B_k.png)
 
 ### 3.2. MN-Major Swizzle Layout
 
+If the gmem tile is M/N-major, you should choose the MN-major swizzle layout for smem.
+
 #### 3.2.1. MN-Major Swizzle None
+
+The swizzle atom for MN-major layout is `16Bx8` (`M=16B` or `M=8` assuming bf16 input, `K=8`).
+And each `16Bx1` chunk now contains 8 M values that are contiguous in both gmem and smem after swizzling.
+But the 1 cycle/chunk property is not changed.
+`ldmatrix.m8n8` can still load each `16Bx8` subtile in 1 cycle without bank conflicts, except this time the subtile is MN-major rather than K-major.
 
 ![swizzle_none_mn](./figures/swizzle_none_mn.png)
 
 #### 3.2.2. MN-Major Swizzle 32B
 
+Similarly, the swizzle atom becomes `32Bx8` (`M=32B` or `M=16` assuming bf16 input, `K=8`).
+And it contains 16 `16Bx1` chunks or 2 `16Bx8` subtiles (colored in grey and red).
+The swizzle 32B layout ensures that `ldmatrix.m8n8` can load each colored `16Bx8` subtile in 1 cycle without bank conflicts.
+
 ![swizzle_32B_mn](./figures/swizzle_32B_mn.png)
 
 #### 3.2.3. MN-Major Swizzle 64B
+
+For swizzle 64B, the swizzle atom becomes `64Bx8` (`M=64B` or `M=32` assuming bf16 input, `K=8`).
+And it contains 32 `16Bx1` chunks or 4 `16Bx8` subtiles (colored in grey, red, purple, and blue).
+The swizzle 64B layout ensures that `ldmatrix.m8n8` can load each colored `16Bx8` subtile in 1 cycle without bank conflicts.
 
 ![swizzle_64B_mn](./figures/swizzle_64B_mn.png)
 
 #### 3.2.4. MN-Major Swizzle 128B
 
+Swizzle 128B is the most commonly used swizzle layout and we will explain the reason in [Sec. 5](#5-which-swizzle-atom-to-choose).
+
+Same deal again, the swizzle atom becomes a `128Bx8` tile (`M=128B` or `M=64` assuming bf16 input, `K=8`).
+And each `16Bx8` subtile can be loaded from smem in 1 cycle without bank conflicts.
+
 ![swizzle_128B_mn](./figures/swizzle_128B_mn.png)
 
 ## 4. Why Swizzle?
 
+Now that we know what the swizzle layout is, let's answer the question why we need to swizzle.
+You can already kinda see the reason: it allows the `ldmatrix.m8n8` instruction to load a `8x16B`/`16Bx8` subtile (within a larger tile) in 1 cycle without smem bank conflicts.
+
+Below we explain this with a concrete example.
+Here I want to stage a `M=8, K=32B` (or K=16 assuming bf16 input) K-major tile in gmem to smem.
+In gmem, chunk 0, 1 are contiguous and chunk 2, 3 are contiguous, etc.
+
+So a natural smem layout is to follow the contiguity of the chunks in gmem for better copy vectorization.
+Each gmem to smem copy consists of 2 chunks (32B) instead of 1 chunk (16B).
+We call this the `smem linear layout`.
+As shown on the top right of the figure, I just store chunk 0, 1, 2, 3, ... contiguously in smem.
+But you can immediately see the problem of this layout: the `ldmatrix.m8n8` instruction cannot load a `8x16B` subtile in 1 cycle without smem bank conflicts.
+If I load the grey subtile, it will load chunk 0, 2, 4, 6, 8, 10, 12, 14, they are all stored in half of the smem banks.
+This will cause 2-way bank conflicts.
+
+Now let's see what will happen if we use the `swizzle 32B` layout.
+The `M=8, K=32B` is exactly the size of 1 `swizzle 32B` atom.
+And when we access the grey subtile, it will load chunk 0, 2, 4, 6, 8, 10, 12, 14, they are all stored in different smem banks.
+The same is true for the red subtile.
+So the `ldmatrix.m8n8` instruction can load both the grey and red subtiles in 1 cycle without bank conflicts.
+**Swizzling avoids bank conflicts when `ldmatrix.m8n8` loads a `8x16B` subtile.**
+
 ![why_swizzle](./figures/why_swizzle.png)
 
-Confusingly, `swizzle none` is not the intuitive linear smem layout you would expect because it mandates the `M=8, K=8 K major` subtile to be stored contiguously in smem.
-This means if I have a `M=8, K=16 K-major` tile in gmem, when copying it to smem, the 16 K elements are not contiguous in smem.
+The `swizzle none` layout can also avoid bank conflicts when `ldmatrix.m8n8` loads a `8x16B` subtile.
+But it requires the `M=8, K=8 K major` subtile to be stored contiguously in smem.
+Confusingly, this is different from the `smem linear layout` we mentioned above.
+Even though it's called `swizzle none`, it's not the intuitive linear smem layout you would expect.
 
 ## 5. Which Swizzle Atom to Choose?
 
@@ -256,6 +310,8 @@ This means if I have a `M=8, K=16 K-major` tile in gmem, when copying it to smem
 ![mma_k_major](./figures/mma_k_major.png)
 
 ![mma_m_major](./figures/mma_m_major.png)
+
+slightly different than swizzle used to do matrix transpose
 
 
 ## 7. Swizzle Atom Layout
