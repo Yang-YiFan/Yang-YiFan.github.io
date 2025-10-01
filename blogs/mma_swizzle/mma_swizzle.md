@@ -159,6 +159,7 @@ If the gmem tile is K-major, you should choose the K-major swizzle layout for sm
 #### 3.1.1. K-Major Swizzle None
 
 The first legal layout is called `Swizzle None` as illustrated below.
+CuTe calls it `swizzle interleaved` which is probably more accurate, but we follow the naming convention in the [PTX 9.0 doc](https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-swizzling-modes) and call it `swizzle none`.
 
 ![swizzle_none_k](./figures/swizzle_none_k.png)
 
@@ -299,11 +300,69 @@ Even though it's called `swizzle none`, it's not the intuitive linear smem layou
 
 ## 5. Which Swizzle Atom to Choose?
 
+From the example of [Sec. 4](#4-why-swizzle), we can see that both `swizzle none` and `swizzle 32B` layouts can avoid bank conflicts when `ldmatrix.m8n8` loads a `8x16B` subtile.
+But why would I choose one over the other?
+It's because there will have different *gmem access efficiency*.
+
+Below we give an example to show the performance difference between different swizzle layouts.
+The tile we are trying to load into smem is `M=8, K=64B` (or K=32 assuming bf16 input) K-major tile.
+We compare 3 swizzle layouts: `K-major swizzle none`, `K-major swizzle 32B`, and `K-major swizzle 64B` shown on the right.
+
 ![choose_swizzle_none](./figures/choose_swizzle_none.png)
 
 ![choose_swizzle_32B](./figures/choose_swizzle_32B.png)
 
 ![choose_swizzle_64B](./figures/choose_swizzle_64B.png)
+
+The `8x64B` tile contains 32 `1x16B` chunks or 4 `8x16B` subtiles (colored in grey, red, purple, and blue).
+It will also be constructed from 4 `swizzle none` atoms, 2 `swizzle 32B` atoms, or 1 `swizzle 64B` atom.
+
+The gmem to smem copy can be done in many ways:
+- `ld.global`: gmem->RF, `st.shared`: RF->smem
+- TMA load: gmem->smem
+
+We focus on the `ld.global + st.shared` path since TMA really just hardens that flow in hardware.
+
+When using `swizzle none` layout, we want `st.shared` to not have any bank conflicts to maximize the smem write bandwidth.
+So each thread will store 4B to different banks in smem and all 32 threads will work on 128B contiguous data in smem, i.e. chunk 0, 4, 8, ..., 28.
+Then these 32 threads needs to load chunk 0, 4, 8, ..., 28 from gmem to RF.
+But because the gmem tile is K-major, only a single 16B chunk is contiguous in gmem.
+When reading chunk 0, 4, 8, ..., 28 out, we will have 16B gmem read requests.
+The same is true for other 128B rows of the smem, the gmem read granularity will be 16B.
+
+When using `swizzle 32B` layout, similarly we want to avoid bank conflicts in `st.shared`.
+So all 32 threads will work on chunk 0, 1, 4, 5, 8, 9, 12, 13.
+The gmem load can now happen 2 chunk at a time, i.e. 32B gmem read requests.
+For the other 128B rows of the smem, the gmem read granularity will be 32B.
+
+You can already see the trend, when using `swizzle 64B` layout, the 32 threads will read chunk 0, 1, 2, 3, 4, 5, 6, 7 from gmem.
+The gmem load granularity is 64B.
+Similarly, for row 2, chunk 9, 8, 11, 10, 13, 12, 15, 14 will be read from gmem with the same 64B request granularity.
+
+GPU has 128B cacheline size, so reading contiguous 128B of data best utilize the gmem bandwidth.
+As we can see from the above example:
+- `swizzle none` layout generates 16B gmem read requests
+- `swizzle 32B` layout generates 32B gmem read requests
+- `swizzle 64B` layout generates 64B gmem read requests
+
+So in this example, `K-major swizzle 64B` layout can achieve the best gmem access efficiency. 
+And obviously `swizzle 128B` generates 128B gmem read requests. 
+But we can't use it because the tile size we want is only 64B on the K dimension.
+If we want a `8x128B` tile, `swizzle 128B` is the best choice.
+So you should always try to use `swizzle 128B` layout if possible.
+
+The goal of choosing the swizzle layout is to maximize the gmem read efficiency.
+That is, given a tile size, one should use the largest possible swizzle atom that can fit the tile:
+- If the tile size is `K=16B` K-major, `K-major swizzle none` is the best choice. And will generate 16B gmem read requests.
+- If the tile size is `K=32B` K-major, `K-major swizzle 32B` is the best choice. And will generate 32B gmem read requests.
+- If the tile size is `K=64B` K-major, `K-major swizzle 64B` is the best choice. And will generate 64B gmem read requests.
+- If the tile size is `K>=128B` K-major, `K-major swizzle 128B` is the best choice. And will generate 128B gmem read requests.
+- If the tile size is `M/N=16B` MN-major, `MN-major swizzle none` is the best choice. And will generate 16B gmem read requests.
+- If the tile size is `M/N=32B` MN-major, `MN-major swizzle 32B` is the best choice. And will generate 32B gmem read requests.
+- If the tile size is `M/N=64B` MN-major, `MN-major swizzle 64B` is the best choice. And will generate 64B gmem read requests.
+- If the tile size is `M/N>=128B` MN-major, `MN-major swizzle 128B` is the best choice. And will generate 128B gmem read requests.
+
+The above rule is exactly what's implemented in Cutlass [sm100_smem_selector](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cutlass/gemm/collective/builders/sm100_common.inl#L82) to select the best smem swizzle layout.
 
 ## 6. How Transposed Input is Handled?
 
@@ -320,4 +379,3 @@ slightly different than swizzle used to do matrix transpose
 
 ## 8. Summary
 
-## 9. Additional References
