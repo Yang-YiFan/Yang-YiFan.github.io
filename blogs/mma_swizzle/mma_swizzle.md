@@ -439,7 +439,7 @@ That renders different atom contiguity patterns in smem.
 As a kernel author, you should be able to use any of the swizzle atom layout and get the correct result.
 CuTe should abstract away the different address calculation for different swizzle atom layouts.
 
-### 8. What about Hopper and Blackwell?
+## 8. What about Hopper and Blackwell?
 
 So far we've only talked about Ampere mma and hopefully I convinced you the combination of swizzle layout and `ldmatrix` feeds the correct data to the Ampere tensor core.
 
