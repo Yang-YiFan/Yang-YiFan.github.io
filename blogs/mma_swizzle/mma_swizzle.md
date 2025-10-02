@@ -9,7 +9,7 @@ layout: default
 ## 0. Introduction
 
 The tensor cores in Nvidia GPUs accelerate matrix multiplication operations. 
-However, the tensor core has particular layout requirement on its input matrices in shared memory (smem). 
+And the tensor cores have particular layout requirement on their input matrices in shared memory (smem). 
 You can't just feed a row-major or column-major matrix to the tensor core. 
 It requires the input matrices to follow a specific set of `Swizzle Layout`.
 
@@ -454,10 +454,9 @@ Stay tuned :)
 ## 9. Summary
 
 In this blog I covered mostly what you need to know about mma swizzle layout:
-- The 8 legal mma swizzle layouts and their specifications
-- Swizzle layout makes sure when the tile is copied from gmem to smem and read out from smem (`8x16B` or `16x8B`), there is no smem bank conflicts
-- Swizzling doesn't change the major-ness of the input tile when loading from gmem to smem, it only changes how the 16B chunk are laid out in smem
-- Maximizing swizzle atom size improves gmem access efficiency (longer contiguous loads)
-- Transpose happens during smem->RF copy of `ldmatrix` and is not handled by swizzle layout
-- Swizzle atom layout in smem can be arbitrary and should always yield the correct result
-
+- The 8 legal mma swizzle layouts and their specifications.
+- Swizzle layout makes sure when the tile is copied from gmem to smem and read out from smem (`8x16B` or `16x8B`), there is no smem bank conflicts.
+- Swizzling doesn't change the major-ness of the input tile when loading from gmem to smem, it only changes how the 16B chunk are laid out in smem.
+- Maximizing swizzle atom size improves gmem access efficiency (longer contiguous loads).
+- Transpose happens during smem->RF copy of `ldmatrix` and is not handled by swizzle layout.
+- Swizzle atom layout in smem can be arbitrary and should always yield the correct result.

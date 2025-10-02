@@ -11,13 +11,13 @@ You can access my curriculum vitae [here](misc/CV_Yifan_Yang.pdf).
 
 # [Blogs](./blogs/blogs.html)
 
-I plan to write blogs during my process of learning CUDA/Cutlass/Cute/Triton programming. Stay tuned for more!
+I plan to write blogs during my process of learning CUDA/Cutlass/CuTe/Triton programming. Stay tuned for more!
 
-- ### [Using TMA Load, Prefetch, and Multicast Load in CuTe](./blogs/cute_tma/cute_tma.html)
-- ### [How to Make a Compute-bound Problem Actually Compute-bound](./blogs/reg_tile/reg_tile.md)
-- ### [CuTe Layout and Tensor](./blogs/cute_layout/cute_layout.md)
+- ### [[Latest] Tensor Core MMA Swizzle Layout](./blogs/mma_swizzle/mma_swizzle.md)
 - ### [Using Programmatic Dependent Launch (PDL) to Reduce End-to-End Latency](./blogs/pdl/pdl.md)
-- ### [Tensor Core MMA Swizzle Layout](./blogs/mma_swizzle/mma_swizzle.md)
+- ### [CuTe Layout and Tensor](./blogs/cute_layout/cute_layout.md)
+- ### [How to Make a Compute-bound Problem Actually Compute-bound](./blogs/reg_tile/reg_tile.md)
+- ### [Using TMA Load, Prefetch, and Multicast Load in CuTe](./blogs/cute_tma/cute_tma.html)
 
 # Publications
 
