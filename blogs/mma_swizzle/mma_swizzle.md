@@ -116,6 +116,7 @@ TV((t0, t1), (v0, v1)) # natural coordinate of tensor
 
 Note that the above two layouts are inverse of each other, i.e. the inverse of `TV-layout` is the `inverse TV-layout`.
 We can validate this easily with the following CuTe-DSL code by taking the `right_inverse` of the TV-layout and will get the `inverse TV-layout`.
+The CuTe C++ code is [here](https://github.com/Yang-YiFan/Yang-YiFan.github.io/tree/main/blogs/mma_swizzle/code).
 
 ```python
 import cutlass
