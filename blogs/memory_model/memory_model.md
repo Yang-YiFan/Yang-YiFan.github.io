@@ -102,10 +102,14 @@ So in [Sec. 2](#2-common-memory-ordering-patterns) we will cover all the common 
 
 ## 2. Common Memory Ordering Patterns
 
-| src \ dst | Generic Proxy | Async Proxy |
+In this section, we will enumerate all the common memory ordering patterns occurred in kernel programming.
+We focus on the **producer-consumer** pattern as it's the most common technique and the usual place where the memory model is needed.
+Based on the proxy of the producer and consumer threads, we can categorize the memory ordering patterns into 4 categories:
+
+| producer \ consumer | Generic Proxy | Async Proxy |
 |-----------|---------------|--------------|
-| Generic Proxy | [Intra-CTA (Sec. 2.1.1)](#211-intra-cta-producer-consumer)<br>[Intra-Cluster (Sec. 2.1.2)](#212-intra-cluster-producer-consumer)<br>[Intra-GPU (Sec. 2.1.3)](#213-intra-gpu-producer-consumer) | [TMA -> CUDA Core (Sec. 2.2.1)](#221-tma-cuda-core)<br>[tcgen05 -> CUDA Core (Sec. 2.2.2)](#222-tcgen05-cuda-core) |
-| Async Proxy | [CUDA Core -> TMA (Sec. 2.3.1)](#231-cuda-core-tma)<br>[CUDA Core -> tcgen05 (Sec. 2.3.2)](#232-cuda-core-tcgen05) | [TMA -> tcgen05 (Sec. 2.4.1)](#241-tma-tcgen05) |
+| Generic Proxy | [Intra-CTA (Sec. 2.1.1)](#211-intra-cta-producer-consumer)<br>[Intra-Cluster (Sec. 2.1.2)](#212-intra-cluster-producer-consumer)<br>[Intra-GPU (Sec. 2.1.3)](#213-intra-gpu-producer-consumer) | [CUDA Core -> TMA (Sec. 2.3.1)](#231-cuda-core-tma)<br>[CUDA Core -> tcgen05 (Sec. 2.3.2)](#232-cuda-core-tcgen05) |
+| Async Proxy | [TMA -> CUDA Core (Sec. 2.2.1)](#221-tma-cuda-core)<br>[tcgen05 -> CUDA Core (Sec. 2.2.2)](#222-tcgen05-cuda-core) | [TMA -> tcgen05 (Sec. 2.4.1)](#241-tma-tcgen05) |
 
 ### 2.1. Generic Proxy -> Generic Proxy
 
