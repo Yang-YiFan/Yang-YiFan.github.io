@@ -12,7 +12,7 @@ layout: default
 
 I wish I never think about the memory model.
 And for a while this does seem to be the case. 
-You load your data from GMEM to SMEM and then you do a `__syncthreads()`.
+You load your data from GMEM to SMEM and then you do a [`__syncthreads()`]((https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#synchronization-functions)).
 Then the data is visible to all threads in the CTA.
 Life is good.
 
@@ -51,7 +51,7 @@ A totally valid hardware implementation of this would be while the stored value 
 In order for this producer-consumer relationship to be correct, we need to use proper fences to guarantee the memory order on top of the execution order, i.e. ensure thread A's memory operation is visible to thread B.
 
 
-### 1.3. Scope
+### 1.3. [Scope](https://docs.nvidia.com/cuda/parallel-thread-execution/#scope)
 
 Since memory model cares about the memory order between a set of threads, as you can imagine, the scope where these threads are all belong to may be different.
 Sometimes you just want threads within a CTA to be synchronized, sometimes you want threads within a GPU to be synchronized.
@@ -68,7 +68,7 @@ The curly boxes represent different scopes.
 ![scope](./figures/scope.png)
 
 
-### 1.4. State Space
+### 1.4. [State Space](https://docs.nvidia.com/cuda/parallel-thread-execution/#memory-consistency-state-spaces)
 
 An orthogonal thing to `scope` is the `state space` of the memory operation, meaning we care about the memory operation on which storage (SMEM/GMEM/DSMEM/etc.) idiom.
 The figure above also shows the state space hierarchy.
@@ -80,7 +80,7 @@ In ptx, this often manifests as a `.xxx::yyy` suffix in the ptx instruction.
 The larger/farther away the state space, the more costly the synchronization is.
 
 
-### 1.5. Generic vs Async Proxy
+### 1.5. [Generic vs Async Proxy](https://docs.nvidia.com/cuda/parallel-thread-execution/#proxies)
 
 So far the thread we've been talking about is thread running on the CUDA core.
 Modern Nvidia GPUs introduces many asynchronous co-processors (e.g. TMA/Tensor Cores) that can be viewed as an asynchronous thread other than the normal threads running on the CUDA core.
@@ -93,12 +93,38 @@ The figure below shows the generic proxy and async proxy on an SM.
 
 ![proxy](./figures/proxy.png)
 
-The async proxy includes the TMA unit, the Hopper (`wgmma`)/Blackwell (`tcgen05.mma`) Tensor Cores, the `mbarrier` unit.
+The async proxy includes the TMA unit, the Hopper ([`wgmma`](https://docs.nvidia.com/cuda/parallel-thread-execution/#asynchronous-warpgroup-level-matrix-instructions))/Blackwell ([`tcgen05`](https://docs.nvidia.com/cuda/parallel-thread-execution/#tensorcore-5th-generation-instructions)) Tensor Cores, the [mbarrier](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier) unit.
 The async proxy primarily communicates with the generic proxy through different storage idiom (SMEM/TMEM/GMEM). 
 Unfortunately, each unit has a different way to synchronize the memory order.
 So in [Sec. 2](#2-common-memory-ordering-patterns) we will cover all the common patterns.
 
 ### 1.6. Synchronization Mechanisms
+
+There are several ways to enforce execution order and memory order on Nvidia GPUs.
+The table below lists the most common ones which are the ones we will cover in this blog.
+
+| Mechanism | Example ptx | Enforces Execution Order | Enforces Memory Order | Scope | State Space | Proxy |
+|-----------|-------------|--------------------------|------------------------|-------|-------------|-------|
+| [`__syncthreads()`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#synchronization-functions), Named Barriers | [`bar.sync`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-bar) | Yes | Yes | .cta | SMEM/GMEM | Generic |
+| [mbarrier](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier) | [`mbarrier.arrive`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-arrive), [`mbarrier.try_wait`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-test-wait-try-wait) | Yes | Optional | .cta/.cluster | SMEM/DSMEM/GMEM | Generic/Async |
+| Generic fence | [`fence.cta`, `fence.cluster`, `fence.gpu`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar) | No | Yes | .cta/.cluster/.gpu | SMEM/DSMEM/GMEM | Generic |
+| Async fence | [`fence.proxy.async`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar) | No | Yes | .cta/.cluster | SMEM/DSMEM/GMEM | Generic->Async |
+| `tcgen05` fence | [`tcgen05.wait::ld`, `tcgen05.wait::st`](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-instructions-tcgen05-wait) | No | Yes | .cta | TMEM | Generic<->Async |
+
+### 1.7. [Memory Ordering Semantics](https://docs.nvidia.com/cuda/parallel-thread-execution/#release-acquire-patterns)
+
+Often we append a synchronization instruction (e.g. [mbarrier](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier)) with a memory ordering semantic to enforce the memory order on top of the execution order.
+The few notable ones are:
+
+- `release`: The release pattern makes prior memory operations (before `release`) from the current thread visible to other threads.
+- `acquire`: The acquire pattern makes prior (`before acquire`) memory operations from other threads visible to the current thread.
+- `acq_rel`: The acq_rel pattern makes prior (`before acq_rel`) memory operations from other threads visible to the current thread and makes the current thread's prior (`before acq_rel`) memory operations visible to other threads.
+- `relaxed`: No memory order is enforced.
+
+Note that the memory ordering is kinda meaningless by itself without a proper execution order synchronization.
+Because then it's hard to define the term `prior`.
+It's totally possible thread B executes `acquire` way earlier than thread A executes `release` (in terms of time), there is no way thread A's value is visible to thread B.
+It has to be accompanied by a proper execution order synchronization.
 
 ## 2. Common Memory Ordering Patterns
 
@@ -115,8 +141,8 @@ Based on the proxy of the producer and consumer threads, we can categorize the m
 
 | State Space \ Scope | .cta | .cluster | .gpu |
 |---------------------|------|----------|------|
-| SMEM/DSMEM | `fence.cta` / `__syncthreads()` / `__threadfence_block()` | `fence.cluster` / `fence.gpu` / `__threadfence()` / `barrier.cluster.arrive+wait` | N/A |
-| GMEM | `fence.cta` / `__syncthreads()` / `__threadfence_block()` | `fence.cluster` / `fence.gpu` / `__threadfence()` / `barrier.cluster.arrive+wait` | `fence.gpu` / `__threadfence()` |
+| SMEM/DSMEM | [`fence.cta`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar) / [`__syncthreads()`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#synchronization-functions) / [`__threadfence_block()`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#memory-fence-functions) / [`mbarrier.arrive+try_wait`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier) | [`fence.cluster` / `fence.gpu`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar) / [`__threadfence()`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#memory-fence-functions) / [`barrier.cluster.arrive+wait`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-barrier-cluster) / `mbarrier.arrive+try_wait` | N/A |
+| GMEM | `fence.cta` / `__syncthreads()` / `__threadfence_block()`/ `mbarrier.arrive+try_wait` | `fence.cluster` / `fence.gpu` / `__threadfence()` / `barrier.cluster.arrive+wait` / `mbarrier.arrive+try_wait` | `fence.gpu` / `__threadfence()` |
 | Effective SASS | `MEMBAR.CTA` | `MEMBAR.GPU` | `MEMBAR.GPU` |
 
 #### 2.1.1. Intra-CTA Producer-Consumer
