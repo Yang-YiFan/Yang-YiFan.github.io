@@ -24,6 +24,9 @@ In this blog, I attempt to provide concrete examples on how to do synchronizatio
 
 ## 1. Background
 
+Unfortunately we need to define some terminologies first.
+Please bear with me as I guarantee you they are actually useful.
+
 ### 1.1. What is Memory Consistency Model?
 
 The memory consistency model roughly describes when the memory operation performed by one thread is visible to other threads.
@@ -105,8 +108,8 @@ The table below lists the most common ones which are the ones we will cover in t
 
 | Mechanism | Example ptx | Enforces Execution Order | Enforces Memory Order | Scope | State Space | Proxy |
 |-----------|-------------|--------------------------|------------------------|-------|-------------|-------|
-| [`__syncthreads()`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#synchronization-functions), Named Barriers | [`bar.sync`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-bar) | Yes | Yes | .cta | SMEM/GMEM | Generic |
-| [mbarrier](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier) | [`mbarrier.arrive`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-arrive), [`mbarrier.try_wait`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-test-wait-try-wait) | Yes | Optional | .cta/.cluster | SMEM/DSMEM/GMEM | Generic/Async |
+| [`__syncthreads()`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#synchronization-functions), [Named Barriers](https://github.com/NVIDIA/cutlass/blob/8afb19d9047afc26816a046059afe66763e68aa5/include/cutlass/arch/barrier.h#L159) | [`bar.sync`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-bar) | Yes | Yes | .cta | SMEM/GMEM | Generic |
+| [mbarrier](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier) | [`mbarrier.arrive`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-arrive), [`mbarrier.try_wait`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-test-wait-try-wait) | Yes | Optional | .cta/.cluster | SMEM/DSMEM | Generic/Async |
 | Generic fence | [`fence.cta`, `fence.cluster`, `fence.gpu`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar) | No | Yes | .cta/.cluster/.gpu | SMEM/DSMEM/GMEM | Generic |
 | Async fence | [`fence.proxy.async`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar) | No | Yes | .cta/.cluster | SMEM/DSMEM/GMEM | Generic->Async |
 | `tcgen05` fence | [`tcgen05.wait::ld`, `tcgen05.wait::st`](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-instructions-tcgen05-wait) | No | Yes | .cta | TMEM | Generic<->Async |
@@ -137,19 +140,106 @@ Based on the proxy of the producer and consumer threads, we can categorize the m
 | Generic Proxy | [Intra-CTA (Sec. 2.1.1)](#211-intra-cta-producer-consumer)<br>[Intra-Cluster (Sec. 2.1.2)](#212-intra-cluster-producer-consumer)<br>[Intra-GPU (Sec. 2.1.3)](#213-intra-gpu-producer-consumer) | [CUDA Core -> TMA (Sec. 2.3.1)](#231-cuda-core-tma)<br>[CUDA Core -> tcgen05 (Sec. 2.3.2)](#232-cuda-core-tcgen05) |
 | Async Proxy | [TMA -> CUDA Core (Sec. 2.2.1)](#221-tma-cuda-core)<br>[tcgen05 -> CUDA Core (Sec. 2.2.2)](#222-tcgen05-cuda-core) | [TMA -> tcgen05 (Sec. 2.4.1)](#241-tma-tcgen05) |
 
+In this blog for the Tensor Core part we focus on the Blackwell tensor core (`tcgen05`) but Hopper Tensor Core should be spiritually the same.
+
 ### 2.1. Generic Proxy -> Generic Proxy
+
+Traditional CUDA SIMT programming (no TMA, no Tensor Core) would just involve threads within the generic proxy synchronizing with each other in a producer-consumer relationship.
+The table below lists some of the ways to enforce memory order between threads within the generic proxy.
 
 | State Space \ Scope | .cta | .cluster | .gpu |
 |---------------------|------|----------|------|
 | SMEM/DSMEM | [`fence.cta`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar) / [`__syncthreads()`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#synchronization-functions) / [`__threadfence_block()`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#memory-fence-functions) / [`mbarrier.arrive+try_wait`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier) | [`fence.cluster` / `fence.gpu`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar) / [`__threadfence()`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#memory-fence-functions) / [`barrier.cluster.arrive+wait`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-barrier-cluster) / `mbarrier.arrive+try_wait` | N/A |
-| GMEM | `fence.cta` / `__syncthreads()` / `__threadfence_block()`/ `mbarrier.arrive+try_wait` | `fence.cluster` / `fence.gpu` / `__threadfence()` / `barrier.cluster.arrive+wait` / `mbarrier.arrive+try_wait` | `fence.gpu` / `__threadfence()` |
+| GMEM | `__syncthreads()` / `__threadfence_block()` / `mbarrier.arrive+try_wait+fence.cta` | `fence.cluster` / `fence.gpu` / `__threadfence()` / `barrier.cluster.arrive+wait` / `mbarrier.arrive+try_wait+fence.cluster` | `fence.gpu` / `__threadfence()` |
 | Effective SASS | `MEMBAR.CTA` | `MEMBAR.GPU` | `MEMBAR.GPU` |
 
 #### 2.1.1. Intra-CTA Producer-Consumer
 
-membar.cta / syncthreads()
+This means the producer and consumer threads are within the same CTA.
+Irrespective of the synchronization mechanism, the equivalent SASS instruction that guarantees memory order is `MEMBAR.CTA`.
+It's either built implicitly into the instruction or manually inserted by the compiler when lowering from ptx to SASS.
+
+Two use cases come into mind:
+1. Producer threads read from GMEM and write to SMEM. Then consumer threads (can be the same set of threads) read from SMEM and do some computation.
+2. In [Algorithm 1 of Flash Attention v1](https://arxiv.org/pdf/2205.14135), The partial result $O_i$ of the previous iteration is written to GMEM by producer threads and then reload back into SMEM for the next iteration by consumer threads.
+
+##### 2.1.1.1. `__syncthreads()` and `Named Barriers`
+
+The most popular way is to use [`__syncthreads()`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#synchronization-functions) to guarantee memory order.
+`__syncthreads()` implicitly carry the `acq-rel` semantic meaning the threads after `__syncthreads()` can see the memory operations' effects (on *both* SMEM and GMEM) before `__syncthreads()`.
+Needless to say, `__syncthreads()` guarantees execution order too, meaning the instructions after `__syncthreads()` will be executed after all the threads in the CTA have arrived at the `__syncthreads()` point.
+Combined, this ensures when the consumer threads get unblocked by `__syncthreads()`, the producer threads' finish the memory operations before `__syncthreads()` and the effects are visible.
+
+```python
+Producer threads:
+    ld.global reg, addr
+    st.shared addr, reg
+    __syncthreads()
+Consumer threads:
+    __syncthreads()
+    ld.shared reg, addr
+    ...
+```
+
+[Named Barriers](https://github.com/NVIDIA/cutlass/blob/8afb19d9047afc26816a046059afe66763e68aa5/include/cutlass/arch/barrier.h#L159) has the exact same effect as `__syncthreads()` but can be applied to a subset of threads within the CTA while `__syncthreads()` is applied to all threads in the CTA.
+
+##### 2.1.1.2. `mbarrier.arrive+try_wait`
+
+Alternatively, we can use [mbarrier](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier) to guarantee execution order and memory order.
+The *default* semantic of [`mbarrier.arrive`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-arrive) is `release` and the *default* semantic of [`mbarrier.try_wait`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-mbarrier-test-wait-try-wait) is `acquire`.
+This means when the consumer threads finish waiting on the mbarrier, the producer threads finish executing their memory operations before `mbarrier.arrive`.
+And the producer threads' memory operations' effects are visible to the consumer threads.
+
+Note that `mbarrier` only applies to SMEM/DSMEM, not GMEM.
+Because the state space in the ptx doc is either `.shared::cta` or `.shared::cluster`.
+
+```python
+# initialize mbarrier arrive count to num producer threads
+Producer threads:
+    ld.global reg, addr
+    st.shared addr, reg
+    mbarrier.arrive.release.cta
+Consumer threads:
+    mbarrier.try_wait.acquire.cta
+    ld.shared reg, addr
+    ...
+```
+
+##### 2.1.1.3. `mbarrier.relaxed.arrive+try_wait` + `fence.cta`
+
+If you don't want to use the `acquire/release` semantic built into the mbarrier but still want to guarantee memory order, you can use explicit fences + execution order synchronization (achieved by `__syncthreads()` or `mbarrier.relaxed`) to achieve the same effect.
+
+```python
+# initialize mbarrier arrive count to num producer threads
+Producer threads:
+    ld.global reg, addr
+    st.shared addr, reg
+    fence.release.cta
+    mbarrier.relaxed.arrive
+Consumer threads:
+    mbarrier.relaxed.try_wait
+    fence.acquire.cta
+    ld.shared reg, addr
+    ...
+```
+
+Here we use `relaxed` version of the mbarrier to only guarantee execution order.
+But we insert explicit memory fences to guarantee memory order.
+When the consumer threads get unblocked by `mbarrier.relaxed.try_wait`, this means all the producer threads have finished executing `fence.release.cta`.
+Then after the consumer threads execute `fence.acquire.cta`, the memory operation by the producer threads are visible to the consumer threads.
+
+Additionally, since `fence.cta` guarantees memory order on GMEM, we can use this pattern when the producer threads write to GMEM and the consumer threads read from GMEM.
+This is what the `acq_rel` semantic of `mbarrier` is not capable of.
+
+The execution order here is also necessary to make this producer-consumer relationship correct.
+Imagine not having the `mbarrier` synchronization, how would the consumer threads know when the producer threads have finished executing `fence.release.cta`?
+There is no way to know.
+
 
 #### 2.1.2. Intra-Cluster Producer-Consumer
+
+This means the producer and consumer threads are within the same cluster but not necessarily the same CTA.
+
 
 membar.gpu / cluster_sync() / st.async
 
