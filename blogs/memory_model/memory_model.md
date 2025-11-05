@@ -12,7 +12,7 @@ layout: default
 
 I wish I never think about the memory model.
 And for a while this does seem to be the case. 
-You load your data from GMEM to SMEM and then you do a [`__syncthreads()`]((https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#synchronization-functions)).
+You load your data from GMEM to SMEM and then you do a [`__syncthreads()`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#synchronization-functions).
 Then the data is visible to all threads in the CTA.
 Life is good.
 
@@ -140,8 +140,8 @@ Based on the proxy of the producer and consumer threads, we can categorize the m
 
 | producer \ consumer | Generic Proxy | Async Proxy |
 |-----------|---------------|--------------|
-| Generic Proxy | [Intra-CTA (Sec. 2.1.1)](#211-intra-cta-producer-consumer)<br>[Intra-Cluster (Sec. 2.1.2)](#212-intra-cluster-producer-consumer)<br>[Intra-GPU (Sec. 2.1.3)](#213-intra-gpu-producer-consumer) | [CUDA Core -> TMA (Sec. 2.3.1)](#231-cuda-core-tma)<br>[CUDA Core -> tcgen05 (Sec. 2.3.2)](#232-cuda-core-tcgen05) |
-| Async Proxy | [TMA -> CUDA Core (Sec. 2.2.1)](#221-tma-cuda-core)<br>[tcgen05 -> CUDA Core (Sec. 2.2.2)](#222-tcgen05-cuda-core) | [TMA -> tcgen05 (Sec. 2.4.1)](#241-tma-tcgen05) |
+| Generic Proxy | [Intra-CTA (Sec. 2.1.1)](#211-intra-cta-producer-consumer)<br>[Intra-Cluster (Sec. 2.1.2)](#212-intra-cluster-producer-consumer)<br>[Intra-GPU (Sec. 2.1.3)](#213-intra-gpu-producer-consumer) | [CUDA Core -> TMA (Sec. 2.2.1)](#221-cuda-core---tma)<br>[CUDA Core -> tcgen05 (Sec. 2.2.2)](#222-cuda-core---tcgen05) |
+| Async Proxy | [TMA -> CUDA Core (Sec. 2.3.1)](#231-tma---cuda-core)<br>[tcgen05 -> CUDA Core (Sec. 2.3.2)](#232-tcgen05---cuda-core) | [TMA -> tcgen05 (Sec. 2.4.1)](#241-tma---tcgen05) |
 
 In this blog for the Tensor Core part we focus on the Blackwell tensor core (`tcgen05`) but Hopper Tensor Core should be spiritually the same.
 
@@ -226,8 +226,8 @@ Consumer threads:
 
 Here we use `relaxed` version of the mbarrier to only guarantee execution order.
 But we insert explicit memory fences to guarantee memory order.
-When the consumer threads get unblocked by `mbarrier.relaxed.try_wait`, this means all the producer threads have finished executing [`fence.release.cta`]((https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar)).
-Then after the consumer threads execute [`fence.acquire.cta`]((https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar)), the memory operation by the producer threads are visible to the consumer threads.
+When the consumer threads get unblocked by `mbarrier.relaxed.try_wait`, this means all the producer threads have finished executing [`fence.release.cta`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar).
+Then after the consumer threads execute [`fence.acquire.cta`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar), the memory operation by the producer threads are visible to the consumer threads.
 
 Additionally, `fence.cta` guarantees memory order on SMEM/DSMEM/GMEM similar to `__syncthreads()` and `mbarrier` with `acq_rel` semantic.
 [`__threadfence_block()`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#memory-fence-functions) is equivalent to `fence.cta` and both emit `MEMBAR.CTA` in SASS.
@@ -412,25 +412,154 @@ Note that the `release` and `acquire` fence has `sync_restrict` semantic which s
 
 #### 2.1.3. Intra-GPU Producer-Consumer
 
-membar.gpu
+This means the producer and consumer threads are within the same GPU but not necessarily the same grid.
 
-### 2.2. Async Proxy -> Generic Proxy
+The common pattern here is producer-consumer subgrid in a megakernel.
+The producer subgrid executes a layer of the LLM model and produces intermediate activations in GMEM.
+Then the consumer subgrid is the subsequent layer that consumes the intermediate activations in GMEM.
+And we put both layer in a single megakernel.
+[ThunderKitten](https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles) and [Mirage Persistent Kernel](https://zhihaojia.medium.com/compiling-llms-into-a-megakernel-a-path-to-low-latency-inference-cf7840913c17) are two examples of megakernel.
 
-#### 2.2.1. TMA -> CUDA Core
+Now the scope we are synchronizing the producer and consumer threads is `gpu` and the state space is GMEM.
+We can continue using the `release` and `acquire` semantics to guarantee memory order.
+But we can't use `mbarrier` or `__syncthreads()` to establish execution order because they are only effective within a CTA/cluster.
+We will have to use an explicit flag to achieve execution order synchronization.
+The code below shows one way of how this can be done.
+
+```python
+Producer threads:
+    ld.global reg, gaddr
+    st.global.relaxed addr, reg
+    __syncthreads()
+    if thread0:
+        atom.global.gpu.release.inc flag
+Consumer threads:
+    if thread0:
+        while not flag:
+            ld.global.gpu.relaxed flag
+        fence.acquire.gpu
+    __syncthreads()
+    ld.global.relaxed reg, addr
+    ...
+```
+
+On the producer subgrid side, the output activation is stored to GMEM with `st.global.relaxed`.
+`relaxed` semantic is sufficient here (for better performance) because we will guarantee `release` semantic with the flag.
+Then we `__syncthreads()` to ensure all producer threads have finished executing `st.global.relaxed` and the results are visible to other producer threads in the same CTA (recall that `__syncthreads()` has an implicit `fence.cta`).
+Now we elect one thread (thread 0) to signal the consumer subgrid using the flag in GMEM.
+Because of the `__syncthreads()`, all the producer threads' GMEM writes are visible to thread 0 before the `atom`.
+We atomically increment the flag by 1 with `release` semantic.
+Thread 0 can issue a single atomic increment with `gpu` scope and `release` semantic, which makes sure all the producer threads' GMEM writes are visible to other threads in the `gpu` scope.
+
+On the consumer subgrid side, thread 0 spins on the flag in GMEM with `relaxed` semantic and `gpu` scope.
+We don't want it to repeatedly `aquire` load the flag for better performance and will use an explicit fence to guarantee memory order.
+The moment it gets unblocked, thread 0 issues a `fence.acquire.gpu` to guarantee memory order on the consumer side.
+Now all the producer threads' GMEM writes are visible to thread 0 only.
+Then we call `__syncthreads()` to establish execution order and make the data visible to the entire consumer threads (in `cta` scope).
+The implicit `fence.acquire.cta` in `__syncthreads()` makes sure all consumer threads (in `cta` scope) can see the producer threads' GMEM writes.
+Then it's safe to consume the output activation in GMEM with `relaxed` semantic.
+
+Inspecting the SASS code, we get `MEMBAR.GPU` in SASS which is expected for `gpu` scope memory order.
+
+**Important Note:**
+This synchronization pattern leverages the *composibility* property of the `release-acquire` pattern, meaning for the following sequence of events:
+- Thread A releases in cta scope
+- Thread B acquires in cta scope
+- Thread B releases in gpu scope
+- Thread C acquires in gpu scope
+
+There will be a gpu scope `release-acquire` pattern between Thread A and Thread C.
+Another way to put it is, for *whatever scope*, if there is a `release-acquire` pattern between Thread A and Thread B, and a `release-acquire` pattern between Thread B and Thread C, then the memory model guarantees there is a `release-acquire` pattern between Thread A and Thread C.
+
+Putting this in our specific example, on the consumer side, after thread 0's `gpu` scope `acquire` fence, there is a `gpu` scope `release-acquire` pattern between all producer threads and consumer thread 0.
+Then `__syncthreads()` establishes `cta` scope `release-acquire` pattern between consumer thread 0 and all other consumer threads.
+The two `release-acquire` patterns composes to a `gpu` scope `release-acquire` pattern between all producer threads and all consumer threads.
+You can make the same argument for the producer side, we leave it as an exercise to the reader.
+
+Formally, this is described as [causality order](https://docs.nvidia.com/cuda/parallel-thread-execution/#causality-order) in the ptx doc.
+Base causality order 3c describes the composition property of the `release-acquire` pattern.
+
+
+### 2.2. Generic Proxy -> Async Proxy
+
+Sometimes the CUDA core (generic proxy) will produce data that kicks off the asynchronous co-processor's (async proxy) execution.
+We can't use the nromal fence that applies in the generic proxy (e.g. `fence.cta`) to guarantee memory order.
+We have to use the [`fence.proxy.async`](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar) to guarantee memory order between the generic proxy and the async proxy.
+
+#### 2.2.1. CUDA Core -> TMA
+
+During GEMM epilog, we calculate the final output using the CUDA core and we want to use TMA to store the output to GMEM.
+The CUDA cores (producer) first write the output from RF to SMEM, waiting for the TMA (consumer) to consume it.
+After the CUDA core producer writes, the SMEM data is not visible to either the generic proxy (consumer threads on CUDA core) or the async proxy (TMA unit).
+We have to use `fence.cta` to guarantee the memory visibility to the generic proxy and `fence.proxy.async` to guarantee the memory visibility to the async proxy.
+
+```python
+Producer threads:
+    ld.global reg, gaddr
+    st.shared addr, reg
+    fence.proxy.async.shared::cta
+    mbarrier.arrive
+Consumer threads:
+    mbarrier.try_wait
+    # tma store
+    if thread0:
+        cp.async.bulk.tensor.3d.global.shared::cta
+    ...
+```
+
+Here the execution order is guaranteed by `mbarrier`.
+And the memory order from generic proxy to async proxy is guaranteed by `fence.proxy.async.shared::cta`.
+`shared::cta` in `fence.proxy.async` means the state space of the fence is SMEM.
+Hence when the consumer threads get unblocked by `mbarrier.try_wait`, it means all the producer threads have executed the `st.shared` and `fence.proxy.async` such that the SMEM data is visible to the consumer threads in the async proxy.
+
+Inspecting the SASS code, `fence.proxy.async.shared::cta` lowers to `FENCE.VIEW.ASYNC.S` in SASS.
+
+Note that it's also correct to use the `relaxed` version of `mbarrier` to guarantee async proxy visibility since we don't care about whether the consumer threads (generic proxy) can see the SMEM data or not.
+As long as the TMA unit can see the SMEM data, it's good enough.
+This would also avoid an extra `MEMBAR.CTA` in SASS but in practice it's not worth the extra mental burden and the performance overhead is negligible.
+
+#### 2.2.2. CUDA Core -> tcgen05
+
+In Flash Attention, there are two places where the CUDA core (generic proxy) needs to feed data to the tensor core (async proxy):
+1. Softmax (running on CUDA core) produces `P` matrix and it got stored to SMEM, for tensor core (async proxy) to consume in BMM2 (i.e. `V * P`).
+2. BMM2's accumulator `Acc2` needs to be corrected (`Acc2 = Acc2 * alpha`) before being accumulated with `V * P`. CUDA core loads the original `Acc2` from TMEM, does the correction, and stores the corrected `Acc2` back to TMEM, for tensor core (async proxy) to consume in BMM2.
+
+Case 1 is identical to [Sec. 2.2.1](#221-cuda-core---tma) except the async unit is `tcgen05` instead of TMA.
+So keeping using `fence.proxy.async.shared::cta` would yield correct memory order.
+
+For case 2, now the state space is TMEM which requires a different fence.
+[`tcgen05.wait::st`](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-instructions-tcgen05-wait) is the equivalent of `fence.proxy.async.shared::cta` for TMEM.
+It makes TMEM from generic proxy visible to async proxy visible.
+
+```python
+Producer threads:
+    ld.global reg, gaddr
+    tcgen05.st addr, reg
+    tcgen05.wait::st
+    mbarrier.arrive
+Consumer threads:
+    mbarrier.try_wait
+    if thread0:
+        tcgen05.mma addr, A, B, C
+    ...
+```
+
+Same deal, `mbarrier` guarantees execution order and `tcgen05.wait::st` guarantees memory order from generic proxy to async proxy.
+When the consumer threads get unblocked by `mbarrier.try_wait`, it means all the producer threads have executed the `tcgen05.st` and `tcgen05.wait::st` such that the TMEM data is visible to the consumer threads in the async proxy.
+
+Inspecting the SASS code, `tcgen05.wait::st` lowers to `FENCE.VIEW.ASYNC.T` in SASS.
+
+### 2.3. Async Proxy -> Generic Proxy
+
+Other times the async proxy (e.g. TMA/Tensor Core) will produce data that kicks off the CUDA core's (generic proxy) execution.
+
+#### 2.3.1. TMA -> CUDA Core
 
 mbarrier
 
-#### 2.2.2. tcgen05 -> CUDA Core
+#### 2.3.2. tcgen05 -> CUDA Core
 
 ldtm.wait
-
-### 2.3. Generic Proxy -> Async Proxy
-
-#### 2.3.1. CUDA Core -> tcgen05
-
-fence.view.async.S
-
-fence.view.async.T
 
 ### 2.4. Async Proxy -> Async Proxy
 
