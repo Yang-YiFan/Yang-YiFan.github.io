@@ -10,7 +10,7 @@ layout: default
 
 ## 0. Introduction
 
-I wish I never think about the memory model.
+I wish I would never think about the memory model.
 And for a while this does seem to be the case. 
 You load your data from GMEM to SMEM and then you do a [__syncthreads()](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#synchronization-functions).
 Then the data is visible to all threads in the CTA.
@@ -655,4 +655,4 @@ In this blog:
 - We talked about how to do memory between CUDA core threads (generic proxy) in `cta`, `cluster`, and `gpu` scope.
 - We then explained how to enforce memory order between the asynchronous hardware units (TMA, Tensor Core) and the CUDA core threads (generic proxy).
 
-I still wish I never think about the memory model.
+I still wish I would never think about the memory model.

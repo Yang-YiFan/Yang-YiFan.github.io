@@ -6,11 +6,30 @@
 
 class BlogReactions {
   constructor() {
-    this.reactions = ['👍', '❤️', '😄', '🎉', '🤔', '👏', '🔥', '💡'];
+    this.defaultReactions = ['👍', '❤️', '😄', '🎉', '🤔', '👏', '🔥', '💡'];
+    this.availableEmojis = [
+      '😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇',
+      '🥰', '😍', '🤩', '😘', '😗', '☺️', '😚', '😙', '🥲', '😋', '😛', '😜', '🤪',
+      '😝', '🤑', '🤗', '🤭', '🤫', '🤔', '🤐', '🤨', '😐', '😑', '😶', '😏', '😒',
+      '🙄', '😬', '🤥', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧',
+      '🥵', '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '🥸', '😎', '🤓', '🧐', '😕', '😟',
+      '🙁', '☹️', '😮', '😯', '😲', '😳', '🥺', '😦', '😧', '😨', '😰', '😥', '😢',
+      '😭', '😱', '😖', '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬',
+      '👍', '👎', '👏', '🙌', '👐', '🤲', '🤝', '🙏', '✊', '👊', '🤛', '🤜', '💪',
+      '🦾', '🖕', '✌️', '🤞', '🤟', '🤘', '🤙', '👈', '👉', '👆', '🖐️', '✋', '👌',
+      '🤏', '✊', '👍', '👎', '👏', '🙌', '👐', '🤲', '🤝', '🙏', '💯', '💢', '💥',
+      '💫', '💦', '💨', '🕳️', '💣', '💬', '👁️‍🗨️', '🗨️', '🗯️', '💭', '💤', '👋',
+      '🤚', '🖐️', '✋', '🖖', '👌', '🤌', '🤏', '✌️', '🤞', '🤟', '🤘', '🤙', '👈',
+      '👉', '👆', '🖕', '👇', '☝️', '👍', '👎', '👊', '✊', '🤛', '🤜', '👏', '🙌',
+      '👐', '🤲', '🤝', '🙏', '✍️', '💅', '🤳', '💪', '🦾', '🦿', '🦵', '🦶', '👂',
+      '🦻', '👃', '🧠', '🫀', '🫁', '🦷', '🦴', '👀', '👁️', '👅', '👄', '💋', '🩸'
+    ];
     this.storageKey = 'blog-reactions';
     this.aggregateStorageKey = 'blog-reactions-aggregate';
+    this.customEmojisKey = 'blog-custom-emojis';
     this.currentPage = this.getCurrentPageId();
     this.aggregateData = {};
+    this.customEmojis = [];
     this.init();
   }
 
@@ -22,6 +41,7 @@ class BlogReactions {
   init() {
     // Only initialize if we're on a blog post page and not already initialized
     if (this.isBlogPost() && !document.querySelector('.blog-reactions')) {
+      this.loadCustomEmojis();
       this.createReactionContainer();
       this.loadAggregateData();
       this.loadReactions();
@@ -45,20 +65,37 @@ class BlogReactions {
   createReactionContainer() {
     const container = document.createElement('div');
     container.className = 'blog-reactions';
+    
+    const allReactions = [...this.defaultReactions, ...this.customEmojis];
+    
     container.innerHTML = `
       <div class="reactions-header">
         <h4>👋 What did you think of this post?</h4>
       </div>
       <div class="reactions-buttons">
-        ${this.reactions.map(emoji => `
+        ${allReactions.map(emoji => `
           <button class="reaction-btn" data-emoji="${emoji}">
             <span class="emoji">${emoji}</span>
             <span class="count">0</span>
           </button>
         `).join('')}
+        <button class="emoji-picker-btn" title="Add more reactions">
+          <span class="emoji">➕</span>
+        </button>
+      </div>
+      <div class="emoji-picker" style="display: none;">
+        <div class="emoji-picker-header">
+          <span>Pick an emoji:</span>
+          <button class="emoji-picker-close">✕</button>
+        </div>
+        <div class="emoji-picker-grid">
+          ${this.availableEmojis.map(emoji => `
+            <button class="emoji-option" data-emoji="${emoji}">${emoji}</button>
+          `).join('')}
+        </div>
       </div>
       <div class="reactions-footer">
-        <small>Click to react • Each click adds +1 • Your clicks are highlighted</small>
+        <small>Click to react • Each click adds +1 • ➕ to add more emojis</small>
       </div>
     `;
 
@@ -78,6 +115,7 @@ class BlogReactions {
   }
 
   bindEvents() {
+    // Bind reaction buttons
     const buttons = document.querySelectorAll('.reaction-btn');
     buttons.forEach(button => {
       button.addEventListener('click', (e) => {
@@ -85,6 +123,46 @@ class BlogReactions {
         const emoji = button.dataset.emoji;
         this.addReaction(emoji, button);
       });
+    });
+
+    // Bind emoji picker button
+    const pickerBtn = document.querySelector('.emoji-picker-btn');
+    if (pickerBtn) {
+      pickerBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.toggleEmojiPicker();
+      });
+    }
+
+    // Bind emoji picker close button
+    const closeBtn = document.querySelector('.emoji-picker-close');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.hideEmojiPicker();
+      });
+    }
+
+    // Bind emoji options
+    const emojiOptions = document.querySelectorAll('.emoji-option');
+    emojiOptions.forEach(option => {
+      option.addEventListener('click', (e) => {
+        e.preventDefault();
+        const emoji = option.dataset.emoji;
+        this.selectEmoji(emoji);
+      });
+    });
+
+    // Close picker when clicking outside
+    document.addEventListener('click', (e) => {
+      const picker = document.querySelector('.emoji-picker');
+      const pickerBtn = document.querySelector('.emoji-picker-btn');
+      
+      if (picker && picker.style.display !== 'none' && 
+          !picker.contains(e.target) && 
+          !pickerBtn.contains(e.target)) {
+        this.hideEmojiPicker();
+      }
     });
   }
 
@@ -134,6 +212,24 @@ class BlogReactions {
     }
   }
 
+  loadCustomEmojis() {
+    try {
+      const stored = localStorage.getItem(this.customEmojisKey);
+      this.customEmojis = stored ? JSON.parse(stored) : [];
+    } catch (e) {
+      console.warn('Failed to load custom emojis:', e);
+      this.customEmojis = [];
+    }
+  }
+
+  saveCustomEmojis() {
+    try {
+      localStorage.setItem(this.customEmojisKey, JSON.stringify(this.customEmojis));
+    } catch (e) {
+      console.warn('Failed to save custom emojis:', e);
+    }
+  }
+
   loadAggregateData() {
     try {
       const stored = localStorage.getItem(this.aggregateStorageKey);
@@ -142,7 +238,8 @@ class BlogReactions {
       // Initialize page data if it doesn't exist
       if (!this.aggregateData[this.currentPage]) {
         this.aggregateData[this.currentPage] = {};
-        this.reactions.forEach(emoji => {
+        const allReactions = [...this.defaultReactions, ...this.customEmojis];
+        allReactions.forEach(emoji => {
           this.aggregateData[this.currentPage][emoji] = 0;
         });
       }
@@ -209,20 +306,87 @@ class BlogReactions {
     this.loadReactions();
   }
 
+  toggleEmojiPicker() {
+    const picker = document.querySelector('.emoji-picker');
+    if (picker) {
+      const isVisible = picker.style.display !== 'none';
+      picker.style.display = isVisible ? 'none' : 'block';
+    }
+  }
+
+  hideEmojiPicker() {
+    const picker = document.querySelector('.emoji-picker');
+    if (picker) {
+      picker.style.display = 'none';
+    }
+  }
+
+  selectEmoji(emoji) {
+    // Add emoji to custom reactions if not already present
+    const allReactions = [...this.defaultReactions, ...this.customEmojis];
+    if (!allReactions.includes(emoji)) {
+      this.customEmojis.push(emoji);
+      this.saveCustomEmojis();
+      
+      // Initialize in aggregate data
+      if (!this.aggregateData[this.currentPage]) {
+        this.aggregateData[this.currentPage] = {};
+      }
+      if (!this.aggregateData[this.currentPage][emoji]) {
+        this.aggregateData[this.currentPage][emoji] = 0;
+      }
+      
+      // Add new reaction button
+      this.addReactionButton(emoji);
+    }
+    
+    // Find the button and trigger reaction
+    const button = document.querySelector(`[data-emoji="${emoji}"]`);
+    if (button && button.classList.contains('reaction-btn')) {
+      this.addReaction(emoji, button);
+    }
+    
+    // Hide picker
+    this.hideEmojiPicker();
+  }
+
+  addReactionButton(emoji) {
+    const buttonsContainer = document.querySelector('.reactions-buttons');
+    const pickerBtn = document.querySelector('.emoji-picker-btn');
+    
+    if (buttonsContainer && pickerBtn) {
+      // Create new button
+      const newButton = document.createElement('button');
+      newButton.className = 'reaction-btn';
+      newButton.dataset.emoji = emoji;
+      newButton.innerHTML = `
+        <span class="emoji">${emoji}</span>
+        <span class="count">0</span>
+      `;
+      
+      // Insert before the picker button
+      buttonsContainer.insertBefore(newButton, pickerBtn);
+      
+      // Bind event
+      newButton.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.addReaction(emoji, newButton);
+      });
+    }
+  }
+
   // Method to get reaction statistics (for potential future use)
   getStats() {
-    const data = this.getStoredData();
-    const pageData = data[this.currentPage];
+    const pageData = this.aggregateData[this.currentPage];
     
     if (!pageData) return null;
 
-    const counts = pageData.counts || {};
-    const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+    const total = Object.values(pageData).reduce((sum, count) => sum + count, 0);
     
     return {
       totalReactions: total,
-      reactionCounts: counts,
-      mostPopular: Object.entries(counts).sort(([,a], [,b]) => b - a)[0]
+      reactionCounts: pageData,
+      mostPopular: Object.entries(pageData).sort(([,a], [,b]) => b - a)[0]
     };
   }
 }
