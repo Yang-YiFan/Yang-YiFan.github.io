@@ -487,6 +487,10 @@ Sometimes the CUDA core (generic proxy) will produce data that kicks off the asy
 We can't use the nromal fence that applies in the generic proxy (e.g. `fence.cta`) to guarantee memory order.
 We have to use the [fence.proxy.async](https://docs.nvidia.com/cuda/parallel-thread-execution/#parallel-synchronization-and-communication-instructions-membar) to guarantee memory order between the generic proxy and the async proxy.
 
+In other words, the normal `release-acquire` pattern works on establishing memory order in generic proxy -> generic proxy.
+After applying async proxy fences to tie the async proxy's memory operation back to the `release` operation, we can establish memory order in (generic + async) proxy -> (generic + async) proxy.
+After the tieing, the release pattern makes prior memory operations (before `release`) from the current thread (in generic and async proxy) visible to other threads (in generic and async proxy).
+
 #### 2.2.1. CUDA Core -> TMA
 
 During GEMM epilog, we calculate the final output using the CUDA core and we want to use TMA to store the output to GMEM.
@@ -509,15 +513,16 @@ Consumer threads:
 ```
 
 Here the execution order is guaranteed by `mbarrier`.
-And the memory order from generic proxy to async proxy is guaranteed by `fence.proxy.async.shared::cta`.
+And the memory order from producer to consumer is guaranteed by the `release` and `acquire` semantics of the mbarrier arrive and try_wait.
+But this only works in generic proxy.
+`fence.proxy.async.shared::cta` ties the async proxy's memory operation to the `release` semantic of the producer threads such that when the `mbarrier.arrive` is executed, both the generic and async proxy's memory operations are visible to other threads (i.e. consumer threads in whatever proxy) in the scope.
 `shared::cta` in `fence.proxy.async` means the state space of the fence is SMEM.
 Hence when the consumer threads get unblocked by `mbarrier.try_wait`, it means all the producer threads have executed the `st.shared` and `fence.proxy.async` such that the SMEM data is visible to the consumer threads in the async proxy.
 
-Inspecting the SASS code, `fence.proxy.async.shared::cta` lowers to `FENCE.VIEW.ASYNC.S` in SASS.
+Note that, irrespective of the proxy the producer and consumer threads are in, you'd always need `release-acquire` semantics to guarantee memory order.
+If one of the producer or consumer threads is in async proxy, you'd need an *extra* fence to tie the memory order of async proxy to the `release-acquire` pattern.
 
-Note that it's also correct to use the `relaxed` version of `mbarrier` to guarantee async proxy visibility since we don't care about whether the consumer threads (generic proxy) can see the SMEM data or not.
-As long as the TMA unit can see the SMEM data, it's good enough.
-This would also avoid an extra `MEMBAR.CTA` in SASS but in practice it's not worth the extra mental burden and the performance overhead is negligible.
+Inspecting the SASS code, `fence.proxy.async.shared::cta` lowers to `FENCE.VIEW.ASYNC.S` in SASS.
 
 #### 2.2.2. CUDA Core -> tcgen05
 
@@ -545,7 +550,7 @@ Consumer threads:
     ...
 ```
 
-Same deal, `mbarrier` guarantees execution order and `tcgen05.wait::st` guarantees memory order from generic proxy to async proxy.
+Same deal, `mbarrier` guarantees execution order and memory order, and `tcgen05.wait::st` ties the async proxy's activity back to the generic proxy's `release-acquire` memory order.
 When the consumer threads get unblocked by `mbarrier.try_wait`, it means all the producer threads have executed the `tcgen05.st` and `tcgen05.wait::st` such that the TMEM data is visible to the consumer threads in the async proxy.
 
 Inspecting the SASS code, `tcgen05.wait::st` lowers to `FENCE.VIEW.ASYNC.T` in SASS.
@@ -572,8 +577,8 @@ Consumer threads:
 ```
 
 TMA's completion implicitly does two things:
-1. It arrives on the `mbarrier`
-2. It issues a async proxy fence to make the SMEM data visible to the generic proxy.
+1. It arrives on the `mbarrier` with `release` semantic.
+2. It issues a async proxy fence to tie the async proxy's SMEM data write to the `release` pattern.
 
 Then on the consumer side, when the consumer threads get unblocked by `mbarrier.try_wait`, it means the TMA has completed and the SMEM data is visible to the generic proxy.
 
@@ -597,8 +602,8 @@ Consumer threads:
 
 It's more or less the same as [Sec. 2.3.1](#231-tma---cuda-core) except the MMA completion is being explicitly tracked by [tcgen05.commit](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen-async-sync-operations-commit).
 And similarly it does two things:
-1. It arrives on the `mbarrier`
-2. It issues a async proxy fence to make the TMEM data visible to the generic proxy.
+1. It arrives on the `mbarrier` with `release` semantic.
+2. It issues a async proxy fence to tie the async proxy's TMEM data write to the `release` pattern.
 
 Then on the consumer side, when the consumer threads get unblocked by `mbarrier.try_wait`, it means the `tcgen05` has completed and the TMEM data is visible to the generic proxy.
 
@@ -630,7 +635,8 @@ We still need an SM in the middle to track the completion of TMA and kicks off `
 
 Why we need this pattern is beyond obvious.
 It's almost identical to [Sec. 2.3.1](#231-tma---cuda-core) except the consumer is `tcgen05` instead of CUDA core.
-We don't even rely on the implicit async to generic proxy fence embedded in the completion of TMA because we are now the consumer is already in async proxy.
+The completion of TMA arrives on the `mbarrier` with `release` semantic and issues a async proxy fence to tie the async proxy's memory operation back to the `release` pattern.
+Such that when the consumer threads get unblocked by `mbarrier.try_wait`, it means the TMA has completed and the SMEM data is visible to the consumer threads in the generic and async proxy.
 
 ```python
 Producer threads:
@@ -648,6 +654,7 @@ Consumer threads:
 I did not mean for this blog to be this long.
 But using the weakest fence possible is vital for performance in particular in the `cluster` scope.
 Despite the length, I hope at least I give enough examples to help you understand the GPU memory model and how to use it in practice.
+If there are patterns I haven't covered, [CUTLASS](https://github.com/NVIDIA/cutlass) is another great reference.
 
 In this blog:
 - We covered the basic ingredients of the memory model: `state space`, `scope`, `proxy`, and `memory ordering semantics`.
