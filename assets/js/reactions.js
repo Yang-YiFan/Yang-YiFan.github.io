@@ -20,8 +20,8 @@ class BlogReactions {
   }
 
   init() {
-    // Only initialize if we're on a blog post page
-    if (this.isBlogPost()) {
+    // Only initialize if we're on a blog post page and not already initialized
+    if (this.isBlogPost() && !document.querySelector('.blog-reactions')) {
       this.createReactionContainer();
       this.loadAggregateData();
       this.loadReactions();
@@ -58,7 +58,7 @@ class BlogReactions {
         `).join('')}
       </div>
       <div class="reactions-footer">
-        <small>Your reactions are highlighted • Numbers show total reactions including other visitors</small>
+        <small>Click to react • Your reactions are saved locally</small>
       </div>
     `;
 
@@ -149,9 +149,7 @@ class BlogReactions {
       if (!this.aggregateData[this.currentPage]) {
         this.aggregateData[this.currentPage] = {};
         this.reactions.forEach(emoji => {
-          // Generate realistic base counts based on page path hash
-          const baseCount = this.generateBaseCount(this.currentPage, emoji);
-          this.aggregateData[this.currentPage][emoji] = baseCount;
+          this.aggregateData[this.currentPage][emoji] = 0;
         });
       }
     } catch (e) {
@@ -160,29 +158,6 @@ class BlogReactions {
     }
   }
 
-  generateBaseCount(page, emoji) {
-    // Generate a deterministic but realistic-looking base count
-    // This simulates existing reactions from other visitors
-    const hash = this.simpleHash(page + emoji);
-    const emojiWeights = {
-      '👍': 0.3, '❤️': 0.25, '😄': 0.15, '🎉': 0.1, 
-      '🤔': 0.05, '👏': 0.08, '🔥': 0.12, '💡': 0.07
-    };
-    
-    const weight = emojiWeights[emoji] || 0.1;
-    const baseMultiplier = Math.abs(hash) % 20 + 5; // 5-24 range
-    return Math.floor(baseMultiplier * weight * 10); // Scale up
-  }
-
-  simpleHash(str) {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32bit integer
-    }
-    return hash;
-  }
 
   updateAggregateData(emoji, delta) {
     if (!this.aggregateData[this.currentPage]) {
@@ -255,14 +230,18 @@ class BlogReactions {
   }
 }
 
-// Initialize when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-  new BlogReactions();
-});
+// Initialize reactions system
+let reactionsInstance = null;
 
-// Also initialize if DOM is already loaded (in case script loads late)
+function initializeReactions() {
+  if (!reactionsInstance) {
+    reactionsInstance = new BlogReactions();
+  }
+}
+
+// Initialize when DOM is loaded
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => new BlogReactions());
+  document.addEventListener('DOMContentLoaded', initializeReactions);
 } else {
-  new BlogReactions();
+  initializeReactions();
 }
