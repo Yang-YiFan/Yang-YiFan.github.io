@@ -552,14 +552,72 @@ Inspecting the SASS code, `tcgen05.wait::st` lowers to `FENCE.VIEW.ASYNC.T` in S
 ### 2.3. Async Proxy -> Generic Proxy
 
 Other times the async proxy (e.g. TMA/Tensor Core) will produce data that kicks off the CUDA core's (generic proxy) execution.
+Naturally we would need a fence to make the async proxy's data visible to the generic proxy.
+Luckily, this fence is mostly implicitly built into various hardware instructions.
+We will cover the most common ones here.
 
 #### 2.3.1. TMA -> CUDA Core
 
-mbarrier
+Often times we use TMA (async proxy) to copy data from GMEM to SMEM, and then the CUDA core (generic proxy) will consume it from SMEM for further processing.
+
+```python
+Producer threads:
+    if thread0:
+        cp.async.bulk.tensor.3d.shared::cta.global addr
+Consumer threads:
+    mbarrier.try_wait
+    ld.shared reg, addr
+    ...
+```
+
+TMA's completion implicitly does two things:
+1. It arrives on the `mbarrier`
+2. It issues a async proxy fence to make the SMEM data visible to the generic proxy.
+
+Then on the consumer side, when the consumer threads get unblocked by `mbarrier.try_wait`, it means the TMA has completed and the SMEM data is visible to the generic proxy.
+
 
 #### 2.3.2. tcgen05 -> CUDA Core
 
-ldtm.wait
+`tcgen05` tensor core (async proxy) produces data for the CUDA core (generic proxy) to execute the epilog on.
+The only difference is the storage idiom for the data communication is TMEM instead of SMEM.
+
+```python
+Producer threads:
+    if thread0:
+        tcgen05.mma addr, A, B, C
+        tcgen05.commit
+Consumer threads:
+    mbarrier.try_wait
+    tcgen05.ld reg, addr
+    add reg, reg, 1
+    ...
+```
+
+It's more or less the same as [Sec. 2.3.1](#231-tma---cuda-core) except the MMA completion is being explicitly tracked by `tcgen05.commit`.
+And similarly it does two things:
+1. It arrives on the `mbarrier`
+2. It issues a async proxy fence to make the TMEM data visible to the generic proxy.
+
+Then on the consumer side, when the consumer threads get unblocked by `mbarrier.try_wait`, it means the `tcgen05` has completed and the TMEM data is visible to the generic proxy.
+
+Inspecting the SASS code, `tcgen05.commit` lowers to `UTCBAR` in SASS.
+
+**When do I need `tcgen05.wait::ld`?**
+
+In the above example, for the `tcgen05.ld` (producer) to RF (register file) to `add` (consumer) relationship, we don't need `tcgen05.wait::ld` because it's the same thread and dependency/memory order is tracked by register dependency.
+However, for the following sequence of events you would need `tcgen05.wait::ld`:
+
+```python
+tcgen05.ld reg, addr
+tcgen05.wait::ld
+tcgen05.st addr, reg
+```
+In this case,mwe are loading data from TMEM and a later `tcgen05.st` will overwrite the same TMEM address.
+We want to protect the write after read dependency. 
+So `tcgen05.wait::ld` is inserted after the `tcgen05.ld` to guarantee the load is done and it's safe to overwrite TMEM.
+This is because there isn't HW TMEM dependency tracking (same is true for SMEM) so we have to manually enforce the memory order.
+
 
 ### 2.4. Async Proxy -> Async Proxy
 
