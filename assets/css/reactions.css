@@ -1,0 +1,221 @@
+/**
+ * Blog Post Emoji Reactions Styles
+ * Slack-inspired design with theme support
+ */
+
+.blog-reactions {
+  margin: 3rem 0 2rem 0;
+  padding: 1.5rem;
+  border-top: 2px solid var(--clr-splitter-blockquote-and-section);
+  background: var(--clr-bg);
+  border-radius: 8px;
+  transition: all 0.3s ease;
+}
+
+.reactions-header {
+  margin-bottom: 1rem;
+}
+
+.reactions-header h4 {
+  margin: 0;
+  color: var(--clr-h-3-6);
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.reactions-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.reaction-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.7rem;
+  background: var(--clr-buttons-main-bg);
+  border: 1.5px solid var(--clr-buttons-main-border);
+  border-radius: 20px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 0.9rem;
+  color: var(--clr-buttons-main-text);
+  text-decoration: none;
+  position: relative;
+  overflow: hidden;
+}
+
+.reaction-btn:hover {
+  background: var(--clr-buttons-main-bg);
+  border-color: var(--clr-a-text);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  color: var(--clr-buttons-main-text-hover);
+}
+
+.reaction-btn:active {
+  transform: translateY(0);
+}
+
+.reaction-btn.reacted {
+  background: var(--clr-a-text);
+  border-color: var(--clr-a-text);
+  color: white;
+  font-weight: 600;
+}
+
+.reaction-btn.reacted:hover {
+  background: var(--clr-a-text);
+  border-color: var(--clr-a-text);
+  color: white;
+  opacity: 0.9;
+}
+
+.reaction-btn .emoji {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.reaction-btn .count {
+  font-size: 0.85rem;
+  font-weight: 600;
+  min-width: 1rem;
+  text-align: center;
+  display: none; /* Hidden by default, shown when > 0 */
+}
+
+.reaction-btn.reacted .count {
+  color: white;
+}
+
+/* Animation for new reactions */
+.reaction-btn.reaction-animate {
+  animation: reactionPulse 0.3s ease-out;
+}
+
+@keyframes reactionPulse {
+  0% {
+    transform: scale(1) translateY(-1px);
+  }
+  50% {
+    transform: scale(1.1) translateY(-2px);
+  }
+  100% {
+    transform: scale(1) translateY(-1px);
+  }
+}
+
+/* Ripple effect on click */
+.reaction-btn::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  transform: translate(-50%, -50%);
+  transition: width 0.3s, height 0.3s;
+}
+
+.reaction-btn:active::before {
+  width: 100px;
+  height: 100px;
+}
+
+.reactions-footer {
+  margin-top: 0.5rem;
+  text-align: center;
+}
+
+.reactions-footer small {
+  color: var(--clr-small-in-a);
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .blog-reactions {
+    margin: 2rem 0 1.5rem 0;
+    padding: 1rem;
+  }
+  
+  .reactions-buttons {
+    gap: 0.4rem;
+  }
+  
+  .reaction-btn {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.85rem;
+  }
+  
+  .reaction-btn .emoji {
+    font-size: 1rem;
+  }
+  
+  .reactions-header h4 {
+    font-size: 1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .reactions-buttons {
+    gap: 0.3rem;
+  }
+  
+  .reaction-btn {
+    padding: 0.3rem 0.5rem;
+    font-size: 0.8rem;
+  }
+  
+  .reaction-btn .emoji {
+    font-size: 0.9rem;
+  }
+}
+
+/* Dark theme specific adjustments */
+[data-theme="dark"] .blog-reactions {
+  border-top-color: var(--clr-splitter-blockquote-and-section);
+}
+
+[data-theme="dark"] .reaction-btn {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="dark"] .reaction-btn:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Light theme specific adjustments */
+[data-theme="light"] .reaction-btn {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="light"] .reaction-btn:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Accessibility improvements */
+.reaction-btn:focus {
+  outline: 2px solid var(--clr-a-text);
+  outline-offset: 2px;
+}
+
+.reaction-btn:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Smooth transitions for theme changes */
+.blog-reactions,
+.reaction-btn,
+.reactions-header h4,
+.reactions-footer small {
+  transition: background-color 0.3s ease, 
+              border-color 0.3s ease, 
+              color 0.3s ease,
+              box-shadow 0.3s ease;
+}

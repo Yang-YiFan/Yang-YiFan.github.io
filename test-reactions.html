@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Reactions System</title>
+    <link rel="stylesheet" href="./assets/css/reactions.css">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+            line-height: 1.5;
+            color: #24292f;
+            background-color: #ffffff;
+            margin: 0;
+            padding: 2rem;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        /* Simulate your theme variables */
+        :root {
+            --clr-bg: #ffffff;
+            --clr-buttons-main-bg: #f6f8fa;
+            --clr-buttons-main-border: #d0d7de;
+            --clr-buttons-main-text: #24292f;
+            --clr-buttons-main-text-hover: #0969da;
+            --clr-h-3-6: #24292f;
+            --clr-a-text: #0969da;
+            --clr-small-in-a: #656d76;
+            --clr-splitter-blockquote-and-section: #d0d7de;
+        }
+        
+        [data-theme="dark"] {
+            --clr-bg: #0d1117;
+            --clr-buttons-main-bg: #21262d;
+            --clr-buttons-main-border: #30363d;
+            --clr-buttons-main-text: #f0f6fc;
+            --clr-buttons-main-text-hover: #58a6ff;
+            --clr-h-3-6: #f0f6fc;
+            --clr-a-text: #58a6ff;
+            --clr-small-in-a: #8b949e;
+            --clr-splitter-blockquote-and-section: #30363d;
+        }
+        
+        [data-theme="dark"] body {
+            background-color: #0d1117;
+            color: #f0f6fc;
+        }
+        
+        .theme-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: var(--clr-buttons-main-bg);
+            border: 2px solid var(--clr-buttons-main-border);
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+    <button class="theme-toggle" onclick="toggleTheme()">🌙</button>
+    
+    <h1>Test Blog Post - GPU Memory Consistency Model</h1>
+    
+    <p>This is a test page to verify the emoji reaction system works correctly. The reactions should appear at the bottom of this content.</p>
+    
+    <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+    
+    <h2>Features to Test</h2>
+    <ul>
+        <li>Click on emoji reactions</li>
+        <li>See the count increase/decrease</li>
+        <li>Reactions should persist on page reload</li>
+        <li>Toggle between light/dark theme</li>
+        <li>Responsive design on mobile</li>
+    </ul>
+    
+    <footer>
+        <p>This is the footer area where reactions will be inserted above.</p>
+    </footer>
+    
+    <script src="./assets/js/reactions.js"></script>
+    
+    <script>
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            
+            const toggle = document.querySelector('.theme-toggle');
+            toggle.textContent = newTheme === 'dark' ? '☀️' : '🌙';
+        }
+        
+        // Set initial theme
+        document.documentElement.setAttribute('data-theme', 'light');
+    </script>
+</body>
+</html>
