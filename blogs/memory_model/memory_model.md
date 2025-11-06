@@ -63,6 +63,7 @@ We call this the `scope` and this often manifests as a `.xxx` suffix in the ptx 
 
 `.cta` means we care about the memory order between threads within a CTA, `.cluster` means we care about the memory order between threads within a cluster, `.gpu` means we care about the memory order between threads within a GPU.
 Note that there isn't a `.grid` scope.
+There is also a `.sys` scope that includes threads on other GPUs and the CPU, but we don't talk about it in this blog.
 
 The larger the scope, the more costly the synchronization is.
 
@@ -613,6 +614,7 @@ tcgen05.ld reg, addr
 tcgen05.wait::ld
 tcgen05.st addr, reg
 ```
+
 In this case,mwe are loading data from TMEM and a later `tcgen05.st` will overwrite the same TMEM address.
 We want to protect the write after read dependency. 
 So `tcgen05.wait::ld` is inserted after the `tcgen05.ld` to guarantee the load is done and it's safe to overwrite TMEM.
@@ -621,12 +623,36 @@ This is because there isn't HW TMEM dependency tracking (same is true for SMEM) 
 
 ### 2.4. Async Proxy -> Async Proxy
 
+The last category is the async proxy -> async proxy pattern where one async hardware unit (TMA) produces data that kicks off the execution of another async hardware unit (Tensor Core).
+We still need an SM in the middle to track the completion of TMA and kicks off `tcgen05`.
+
 #### 2.4.1. TMA -> tcgen05
 
-mbarrier
+Why we need this pattern is beyond obvious.
+It's almost identical to [Sec. 2.3.1](#231-tma---cuda-core) except the consumer is `tcgen05` instead of CUDA core.
+We don't even rely on the implicit async to generic proxy fence embedded in the completion of TMA because we are now the consumer is already in async proxy.
 
-## Summary
+```python
+Producer threads:
+    if thread0:
+        cp.async.bulk.tensor.3d.shared::cta.global addr
+Consumer threads:
+    mbarrier.try_wait
+    if thread0:
+        tcgen05.mma addr, A, B, C
+    ...
+```
+
+## 3. Summary
+
+I did not mean for this blog to be this long.
+But using the weakest fence possible is vital for performance in particular in the `cluster` scope.
+Despite the length, I hope at least I give enough examples to help you understand the GPU memory model and how to use it in practice.
+
+In this blog:
+- We covered the basic ingredients of the memory model: `state space`, `scope`, `proxy`, and `memory ordering semantics`.
+- We differentiated execution order from memory order and compared several ways to establish execution order and memory order in ptx.
+- We talked about how to do memory between CUDA core threads (generic proxy) in `cta`, `cluster`, and `gpu` scope.
+- We then explained how to enforce memory order between the asynchronous hardware units (TMA, Tensor Core) and the CUDA core threads (generic proxy).
 
 I still wish I never think about the memory model.
-
-

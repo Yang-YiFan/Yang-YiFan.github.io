@@ -13,7 +13,8 @@ You can access my curriculum vitae [here](misc/CV_Yifan_Yang.pdf).
 
 I plan to write blogs during my process of learning CUDA/Cutlass/CuTe/Triton programming. Stay tuned for more!
 
-- ### [[Latest] Tensor Core MMA Swizzle Layout](./blogs/mma_swizzle/mma_swizzle.md)
+- ### [[Latest] GPU Memory Consistency Model](./blogs/memory_model/memory_model.md)
+- ### [Tensor Core MMA Swizzle Layout](./blogs/mma_swizzle/mma_swizzle.md)
 - ### [Using Programmatic Dependent Launch (PDL) to Reduce End-to-End Latency](./blogs/pdl/pdl.md)
 - ### [CuTe Layout and Tensor](./blogs/cute_layout/cute_layout.md)
 - ### [How to Make a Compute-bound Problem Actually Compute-bound](./blogs/reg_tile/reg_tile.md)
@@ -67,5 +68,6 @@ Algorithm-hardware co-design for ConvNet accelerators on embedded FPGAs
 
 # Services
 
+- Light load PC, HPCA 2026
 - Selection Committee Member, MICRO 2024 Student Research Competition
 - Artifact Evaluation Committee Member, ASPLOS 2022, 2023
