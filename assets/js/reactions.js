@@ -58,7 +58,7 @@ class BlogReactions {
         `).join('')}
       </div>
       <div class="reactions-footer">
-        <small>Click to react • Your reactions are saved locally</small>
+        <small>Click to react • Each click adds +1 • Your clicks are highlighted</small>
       </div>
     `;
 
@@ -83,38 +83,32 @@ class BlogReactions {
       button.addEventListener('click', (e) => {
         e.preventDefault();
         const emoji = button.dataset.emoji;
-        this.toggleReaction(emoji, button);
+        this.addReaction(emoji, button);
       });
     });
   }
 
-  toggleReaction(emoji, button) {
+  addReaction(emoji, button) {
     const data = this.getStoredData();
     const pageData = data[this.currentPage] || {};
-    const userReactions = pageData.userReactions || [];
+    const userClicks = pageData.userClicks || {};
 
-    const wasReacted = userReactions.includes(emoji);
-
-    if (wasReacted) {
-      // Remove reaction
-      const index = userReactions.indexOf(emoji);
-      userReactions.splice(index, 1);
-      button.classList.remove('reacted');
-      this.updateAggregateData(emoji, -1);
-    } else {
-      // Add reaction
-      userReactions.push(emoji);
-      button.classList.add('reacted');
-      this.updateAggregateData(emoji, 1);
-      
-      // Add animation
-      button.classList.add('reaction-animate');
-      setTimeout(() => button.classList.remove('reaction-animate'), 300);
+    // Initialize user clicks for this emoji if it doesn't exist
+    if (!userClicks[emoji]) {
+      userClicks[emoji] = 0;
     }
+
+    // Always increment - no toggle behavior
+    userClicks[emoji] += 1;
+    this.updateAggregateData(emoji, 1);
+    
+    // Add animation
+    button.classList.add('reaction-animate');
+    setTimeout(() => button.classList.remove('reaction-animate'), 300);
 
     // Update stored data
     data[this.currentPage] = {
-      userReactions: userReactions,
+      userClicks: userClicks,
       lastUpdated: Date.now()
     };
 
@@ -183,7 +177,7 @@ class BlogReactions {
   loadReactions() {
     const data = this.getStoredData();
     const pageData = data[this.currentPage];
-    const userReactions = pageData ? pageData.userReactions || [] : [];
+    const userClicks = pageData ? pageData.userClicks || {} : {};
 
     // Update button states and counts
     const buttons = document.querySelectorAll('.reaction-btn');
@@ -195,8 +189,11 @@ class BlogReactions {
       
       countSpan.textContent = totalCount;
       
-      if (userReactions.includes(emoji)) {
+      // Check if user has clicked this emoji (for visual feedback)
+      if (userClicks[emoji] && userClicks[emoji] > 0) {
         button.classList.add('reacted');
+      } else {
+        button.classList.remove('reacted');
       }
 
       // Hide count if zero
