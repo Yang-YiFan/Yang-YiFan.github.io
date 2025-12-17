@@ -1,4 +1,5 @@
 I am a Deep Learning Architect at [NVIDIA](https://www.nvidia.com/en-us/), working on deep learning inference architecture. I work on both hardware and software techniques to enable ultra-low latency LLM inference on NVIDIA GPUs.
+My work spans on the entire hardware-software stack from low level hardware features, programming model, [kernel optimizations](https://github.com/flashinfer-ai/flashinfer/blob/main/include/flashinfer/gemm/tgv_gemm.cuh) to [model](https://nvidia.github.io/TensorRT-LLM/blogs/tech_blog/blog1_Pushing_Latency_Boundaries_Optimizing_DeepSeek-R1_Performance_on_NVIDIA_B200_GPUs.html) and [algorithm](https://nvidia.github.io/TensorRT-LLM/blogs/tech_blog/blog2_DeepSeek_R1_MTP_Implementation_and_Optimization.html) level optimizations like speculative decoding.
 
 I graduated my Ph.D. in CS from MIT advised by Professor [Daniel Sanchez](http://people.csail.mit.edu/sanchez/) and Professor [Joel Emer](https://people.csail.mit.edu/emer/).
 My thesis work focuses on computer architecture, specifically on accelerating irregular and sparse applications such as sparse transformers (GPT, Bert, etc.), sparse CNNs, sparse tensor algebra, and graph analytics.
