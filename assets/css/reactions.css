@@ -369,3 +369,27 @@
               color 0.3s ease,
               box-shadow 0.3s ease;
 }
+
+/* Prevent Google Analytics map from overlapping with header on short screens */
+@media screen and (max-height: 800px) and (min-width: 961px) {
+  footer {
+    position: static !important;
+    float: left !important;
+    width: 270px !important;
+    margin-top: 40px;
+    bottom: auto !important;
+  }
+  
+  header {
+    position: static !important;
+    float: left !important;
+    width: 270px !important;
+  }
+}
+
+/* Additional fix for medium-width screens with limited height */
+@media screen and (max-height: 700px) and (max-width: 960px) {
+  footer {
+    margin-top: 20px;
+  }
+}
