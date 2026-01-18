@@ -121,16 +121,20 @@ def cute_copy_kernel_4(
     # (T, V) -> (M, K)
     TV_layout = cute.make_layout(((NUM_THREAD_PER_ROW, CTA_M), NUM_VAL_PER_THREAD), stride=((CTA_M * NUM_VAL_PER_THREAD, 1), CTA_M))
     
+    # create the tiled copy that takes the TV layout
+    # each tiled copy will copy the entire [CTA_M, CTA_K] tile using 128 threads
     copy_atom = cute.make_copy_atom(cute.nvgpu.CopyUniversalOp(), mA.element_type)
     tiled_copy = cute.make_tiled_copy(copy_atom, TV_layout, (CTA_M, CTA_K))
     thr_copy = tiled_copy.get_slice(tidx)
+
+    # partition the source and destination tensors into subtiles (each subtile will be copied by 1 tiled copy operation)
     tAgA = thr_copy.partition_S(gA) # (Cpy_S, RestM, RestK)
     tArA = thr_copy.partition_D(gA) # (Cpy_D, RestM, RestK)
 
     # allocate rmem tensor for this thread
     rA = cute.make_rmem_tensor_like(tArA) # (Cpy_D, RestM, RestK)
 
-    # will iterate over each element and do the copy underneath
+    # will iterate over each tiled copy subtile and do the tiled copy underneath
     # equivalent to cute::copy(tiled_copy, tAgA, rA) in C++
     cute.copy(tiled_copy, tAgA, rA)
 
