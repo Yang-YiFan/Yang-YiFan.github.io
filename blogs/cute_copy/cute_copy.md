@@ -16,6 +16,8 @@ Joke aside, through the examples, I'm hoping to convey the following messages:
 - There are many equivalent ways to partition a tensor into tiles in CuTe. Depending on the specific use case, one may be preferred over the other.
 - When you are writing a CuTe kernel, it is still fundamentally SIMT (you have many threads running in parallel).
 
+All the code in this blog can be found [here](https://github.com/Yang-YiFan/Yang-YiFan.github.io/tree/main/blogs/cute_copy/cute_copy.py).
+
 ## 1. Working Example
 
 We are going to do something extremely simple: load a `8x128` GMEM tensor (row major) into RF using 128 threads and 1 CTA.
