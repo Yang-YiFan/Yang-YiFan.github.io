@@ -101,6 +101,42 @@ def cute_copy_kernel_3(
     if tidx == 1:
         cute.print_tensor(rA)
 
+# Approach 4: Using TV-Layout + TiledCopy
+@cute.kernel
+def cute_copy_kernel_4(
+    mA: cute.Tensor,  # Input tensor A
+    CTA_M: cutlass.Constexpr,
+    CTA_K: cutlass.Constexpr,
+    NUM_VAL_PER_THREAD: cutlass.Constexpr,
+):
+    # 128 threads
+    tidx, _, _ = cute.arch.thread_idx()
+
+    # (M, K) -> addr
+    gA = cute.local_tile(mA, (CTA_M, CTA_K), (0, 0))
+
+    NUM_THREAD_PER_ROW = CTA_K // NUM_VAL_PER_THREAD # i.e. 128 // 8 = 16
+
+    # create the TV-layout to represent the thread partitioning
+    # (T, V) -> (M, K)
+    TV_layout = cute.make_layout(((NUM_THREAD_PER_ROW, CTA_M), NUM_VAL_PER_THREAD), stride=((CTA_M * NUM_VAL_PER_THREAD, 1), CTA_M))
+    
+    copy_atom = cute.make_copy_atom(cute.nvgpu.CopyUniversalOp(), mA.element_type)
+    tiled_copy = cute.make_tiled_copy(copy_atom, TV_layout, (CTA_M, CTA_K))
+    thr_copy = tiled_copy.get_slice(tidx)
+    tAgA = thr_copy.partition_S(gA) # (Cpy_S, RestM, RestK)
+    tArA = thr_copy.partition_D(gA) # (Cpy_D, RestM, RestK)
+
+    # allocate rmem tensor for this thread
+    rA = cute.make_rmem_tensor_like(tArA) # (Cpy_D, RestM, RestK)
+
+    # will iterate over each element and do the copy underneath
+    # equivalent to cute::copy(tiled_copy, tAgA, rA) in C++
+    cute.copy(tiled_copy, tAgA, rA)
+
+    if tidx == 1:
+        cute.print_tensor(rA)
+
 @cute.jit
 def cute_copy_host(
     mA: cute.Tensor,
@@ -118,6 +154,8 @@ def cute_copy_host(
         kernel = cute_copy_kernel_2(mA, CTA_M, CTA_K, NUM_VAL_PER_THREAD)
     elif cutlass.const_expr(mode == 3):
         kernel = cute_copy_kernel_3(mA, CTA_M, CTA_K, NUM_VAL_PER_THREAD)
+    elif cutlass.const_expr(mode == 4):
+        kernel = cute_copy_kernel_4(mA, CTA_M, CTA_K, NUM_VAL_PER_THREAD)
     else:
         raise ValueError(f"Invalid mode: {mode}")
 
@@ -134,3 +172,4 @@ if __name__ == "__main__":
     cute_copy_host(mA_tensor, 1)
     cute_copy_host(mA_tensor, 2)
     cute_copy_host(mA_tensor, 3)
+    cute_copy_host(mA_tensor, 4)
