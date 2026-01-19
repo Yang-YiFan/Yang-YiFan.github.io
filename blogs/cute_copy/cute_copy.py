@@ -16,9 +16,6 @@ def cute_copy_kernel_1(
     # 128 threads
     tidx, _, _ = cute.arch.thread_idx()
 
-    # (M, K) -> addr
-    gA = cute.local_tile(mA, (CTA_M, CTA_K), (0, 0))
-
     NUM_THREAD_PER_ROW = CTA_K // NUM_VAL_PER_THREAD # i.e. 128 // 8 = 16
 
     # starting index of the tile for this thread
@@ -31,7 +28,7 @@ def cute_copy_kernel_1(
     # load the value one by one in CUDA C++ style
     for i in cutlass.range(NUM_VAL_PER_THREAD):
         # indexing like CUDA C++
-        rA[i] = gA[m_idx, k_idx + i]
+        rA[i] = mA[m_idx, k_idx + i]
 
     if tidx == 1:
         cute.print_tensor(rA)
