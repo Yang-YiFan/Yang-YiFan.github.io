@@ -65,7 +65,23 @@ def cute_copy_kernel_1(
         cute.print_tensor(rA)
 ```
 
+The kernel above is pretty straightforward and would be roughly what you would write in a normal CUDA C++ code.
+Using the thread index `tidx` we can calculate the index (i.e. `(m_idx, k_idx)`) of the GMEM tensor that this thread is responsible for.
+Then we just do a simple load of each element from GMEM to RF by using the appropriate indexing:
+```python
+rA[i] = mA[m_idx, k_idx + i]
+```
+Because CuTe understands the layout of the GMEM tensor `mA`, it can correctly calculate GMEM address of each element given its (natural) coordinate (the layout encodes the mapping `(m, k) -> address`).
+So calculating the `(m_idx, k_idx)` is sufficient to obtain the correct value of each element.
+
+However, this index calculation for each thread is error prone and hard to maintain.
+If you change the thread partitioning (each thread is responsible for a different (shape) tile of the GMEM tensor), every index calculation would need to be updated.
+That's exactly the value proposition of CuTe.
+By abstracting the thread partitioning through layout algebra, we'd never need to hand calculate the index for each thread, CuTe does all the heavy lifting for us.
+
 ## 3. Approach 2: Using CuTe Layout Algebra
+
+In approach 2, we will use CuTe layout algebra represent the thread partitioning pattern to avoid explicit index calculation.
 
 ```python
 # Approach 2: Using CuTe Layout Algebra
@@ -101,6 +117,16 @@ def cute_copy_kernel_2(
     if tidx == 1:
         cute.print_tensor(rA)
 ```
+
+Compared to approach 1, we are doing 3 things differently:
+1. We use CuTe layout algebra to get the tile of data this CTA is responsible for (aka CTA partitioning). `gA = cute.local_tile(mA, (CTA_M, CTA_K), (0, 0))` does exactly this (you can refer to my previous blog [CuTe Layout and Tensor](../cute_layout/cute_layout.md) for the definition of `local_tile`). Since we use a single CTA to load the whole tile, this code basically gives the GMEM tensor a static/compile time shape of `(CTA_M, CTA_K)`, which would make the subsequent layout algebra slightly more efficient due to constant folding. 
+2. The second change is we obtain the thread level partitioning `tAgA` also using CuTe layout algebra (similar to CTA level partitioning) rather than explicit index calculation. Each thread is responsible for a `(TileM=1, TileK=NUM_VAL_PER_THREAD)` tile of the GMEM tensor. `RestM` and `RestK` mean how many repetition along the `M` and `K` dimensions we stack `(TileM, TileK)` to form the entire GMEM tensor `(CTA_M, CTA_K)`. You can follow the comment to see how we mechanically reshape the GMEM tensor layout to the shape we want. Finally, we index into `tAgA` with the thread index `tidx` to get the tile of data this thread is responsible for. The final `tAgA` tensor is a tile (of shape `(TileK)`) of the original `gA` tensor. We index into the mode `(RestK, RestM)` with 1d coordinate of `tidx` so that the thread id rasterizes along row (`K`) first. This is the thread partitioning pattern we want. If we index into the mode `(RestM, RestK)` then thread id rasterizes along column (`M`) first. 
+3. The last modification is we use the CuTe algorithm `cute.basic_copy` to copy from `tAgA` to `rA` rather than doing for loop manually. Underneath, `cute.basic_copy` will do a loop over each element of `tAgA` and load it to `rA` one by one. Like `cute::copy` in C++, there might be some smartness built underneath to auto vectorize the copy and stuff, so it's recommended to use `cute.basic_copy` instead of doing for loop manually.
+
+You can see we are doing 2 indexing operations in kernel 2: `tidx` indexing to get the tile of data this thread is responsible for, and `i` indexing to load each element from `tAgA` to `rA`.
+We never explicitly calculate any other wired indices like `m_idx` and `k_idx` in approach 1 because CuTe layout algebra handles all the heavy lifting for us!
+Layout algebra manipulates `tAgA` such that index `tidx` will just give the correct thread partitioned tile (and correct base address of the tile).
+Layout of `tAgA` makes sure that index `i` will just give the correct GMEM address for elements in this subtile.
 
 ## 4. Approach 3: Using TV-Layout + Composition
 
