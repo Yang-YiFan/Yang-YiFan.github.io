@@ -118,17 +118,63 @@ def cute_copy_kernel_2(
         cute.print_tensor(rA)
 ```
 
-Compared to approach 1, we are doing 3 things differently:
+Compared to [approach 1](#2-approach-1-traditional-cuda-c-style), we are doing 3 things differently:
 1. We use CuTe layout algebra to get the tile of data this CTA is responsible for (aka CTA partitioning). `gA = cute.local_tile(mA, (CTA_M, CTA_K), (0, 0))` does exactly this (you can refer to my previous blog [CuTe Layout and Tensor](../cute_layout/cute_layout.md) for the definition of `local_tile`). Since we use a single CTA to load the whole tile, this code basically gives the GMEM tensor a static/compile time shape of `(CTA_M, CTA_K)`, which would make the subsequent layout algebra slightly more efficient due to constant folding. 
 2. The second change is we obtain the thread level partitioning `tAgA` also using CuTe layout algebra (similar to CTA level partitioning) rather than explicit index calculation. Each thread is responsible for a `(TileM=1, TileK=NUM_VAL_PER_THREAD)` tile of the GMEM tensor. `RestM` and `RestK` mean how many repetition along the `M` and `K` dimensions we stack `(TileM, TileK)` to form the entire GMEM tensor `(CTA_M, CTA_K)`. You can follow the comment to see how we mechanically reshape the GMEM tensor layout to the shape we want. Finally, we index into `tAgA` with the thread index `tidx` to get the tile of data this thread is responsible for. The final `tAgA` tensor is a tile (of shape `(TileK)`) of the original `gA` tensor. We index into the mode `(RestK, RestM)` with 1d coordinate of `tidx` so that the thread id rasterizes along row (`K`) first. This is the thread partitioning pattern we want. If we index into the mode `(RestM, RestK)` then thread id rasterizes along column (`M`) first. 
 3. The last modification is we use the CuTe algorithm `cute.basic_copy` to copy from `tAgA` to `rA` rather than doing for loop manually. Underneath, `cute.basic_copy` will do a loop over each element of `tAgA` and load it to `rA` one by one. Like `cute::copy` in C++, there might be some smartness built underneath to auto vectorize the copy and stuff, so it's recommended to use `cute.basic_copy` instead of doing for loop manually.
 
 You can see we are doing 2 indexing operations in kernel 2: `tidx` indexing to get the tile of data this thread is responsible for, and `i` indexing to load each element from `tAgA` to `rA`.
-We never explicitly calculate any other wired indices like `m_idx` and `k_idx` in approach 1 because CuTe layout algebra handles all the heavy lifting for us!
+We never explicitly calculate any other wired indices like `m_idx` and `k_idx` in [approach 1](#2-approach-1-traditional-cuda-c-style) because CuTe layout algebra handles all the heavy lifting for us!
 Layout algebra manipulates `tAgA` such that index `tidx` will just give the correct thread partitioned tile (and correct base address of the tile).
 Layout of `tAgA` makes sure that index `i` will just give the correct GMEM address for elements in this subtile.
 
+Another important point I want to make is this is clearly still SIMT code.
+A lot of the partitioning operation are done at compile time (due to constant folding, etc.), so few runtime instructions are generated.
+But the CuTe algorithm (i.e. `cute.basic_copy`) part is decidedly running on 128 threads in parallel during runtime.
+Each thread is issuing copy operations on a disjoint tile of the GMEM tensor.
+Sometimes people forget they are still writing SIMT code when they are using CuTe such that lots of duplicated operations are performed per thread.
+
 ## 4. Approach 3: Using TV-Layout + Composition
+
+[Approach 2](#3-approach-2-using-cute-layout-algebra) demonstrates that CTA/thread level partitioning can be done using CuTe layout algebra.
+An equivalent way to do the same thing is to use TV-Layout + Composition.
+
+TV-Layout stands for Thread-Value Layout.
+It is a layout that represents the mapping from `(T, V)` to `(M, K)` (the tensor coordinates).
+`T` stands for thread id and `V` stands for value id.
+`T1V2` means the third value in thread 1.
+In our example, we have 128 threads and 8 values per thread.
+The figure below shows the desirable TV-Layout for our example.
+
+![TV-Layout](./figures/TV-Layout.png)
+
+The top figure shows the inverse TV-Layout, which is the mapping from `(M, K)` to `(T, V)`.
+This is easier for human to understand and it's basically the partitioning pattern we designed in [Sec. 1](#1-working-example).
+In reality, the kernel actual needs the TV-Layout rather than the inverse TV-Layout, which is shown at the bottom.
+The TV-Layout it describes is: `((16, 8), 8) : ((64, 1), 8)`.
+We can follow the method we described in [CuTe Layout and Tensor](../cute_layout/cute_layout.md) to validate the TV-Layout is indeed what we want.
+
+```bash
+# TV-Layout: (T, V) -> (M, K)
+Shape : ((16, 8), 8)
+        ((t0, t1), v)
+Stride: ((64, 1), 8)
+
+TV_layout((t0, t1), v) # natural/2d coordinate
+  = t0 * 64 + t1 * 1 + v * 8 # 1d coordinate in (M, K) domain
+  = t1 * 1 + (v * 1 + t0 * 8) * 8
+  = (t1, (v, t0)) # 2d coordinate in (M, K) domain
+  = (m, k) # 2d coordinate in (M, K) domain
+
+t = t0 + t1 * 16
+
+m = t1 = t // 16
+k = v + t0 * 8 = v + (t % 16) * 8
+```
+
+Notice that the final equation of `m` and `k` is exactly the manual index calculation we did for `m_idx` and `k_idx` in [approach 1](#2-approach-1-traditional-cuda-c-style)!
+This means the manual index calculation for the thread partitioning can be represented by TV-layout.
+Hence approach 3 does the following leveraging TV-layout to partition the GMEM tensor into tiles for each thread:
 
 ```python
 # Approach 3: Using TV-Layout + Composition
@@ -163,6 +209,34 @@ def cute_copy_kernel_3(
     if tidx == 1:
         cute.print_tensor(rA)
 ```
+
+Thread partitioning is achieved by composing the GMEM tensor layout (`(M, K) - > addr`) with the TV-layout (`(T, V) -> (M, K)`) and then do a indexing with thread id.
+The composition does the following: 
+```bash
+             gA layout
+          |-------------|
+(T, V) -> (M, K) -> addr
+|---------------|
+    TV layout
+|-----------------------|
+     composed layout
+```
+The final composed layout is `(T, V) -> addr`.
+Then we index into the composed layout with thread id `tidx` to get the tile of data this thread is responsible for.
+The final `tAgA` tensor is a tile (of shape `(V=NUM_VAL_PER_THREAD)`) of the original `gA` tensor.
+The rest of the code stays the same.
+
+Both approach 2 and approach 3 try to get this composed layout of `(T, V) -> addr` and index into it with thread id.
+Approach 2 takes an initial GMEM tensor layout of `(M, K) -> addr` and then use layout algebra to manipulate the layout to get `(T, V) -> addr`.
+Approach 3 *decouples* the thread partitioning and the GMEM tensor layout, first it creates the TV-layout `(T, V) -> (M, K)` and then composes it with the GMEM tensor layout `(M, K) -> addr` to get `(T, V) -> addr`.
+They will get equivalent results but depending upon the partitioning pattern, one may be more complex than the other.
+
+And you can obviously mix and match the two approaches.
+Approach 3 uses layout algebra do the CTA level partitioning.
+It then uses TV-layout to do the thread level partitioning.
+The `T` in the TV-layout doesn't necessarily mean a CUDA thread, it could be a CTA, a cluster, a warp, etc.
+It simply represents a mode we want to partition the tensor into.
+
 
 ## 5. Approach 4: Using TV-Layout + TiledCopy
 
