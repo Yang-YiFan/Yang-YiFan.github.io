@@ -9,14 +9,17 @@ layout: default
 ## 0. Introduction
 
 The famous Chinese writer [Lu Xun](https://en.wikipedia.org/wiki/Lu_Xun) (鲁迅) once said: 
-> There are 4 ways to conduct a CuTe copy.
+> There are 4 ways to conduct a CuTe copy.  
+> CuTe copy 有四种写法。
 
 In this blog, I will list the 4 ways to do CuTe copy following Lu Xun's guidance.
 Joke aside, through the examples, I'm hoping to convey the following messages:
 - There are many equivalent ways to partition a tensor into tiles in CuTe. Depending on the specific use case, one may be preferred over the other.
-- When you are writing a CuTe kernel, it is still fundamentally SIMT (you have many threads running in parallel).
+- When you are writing a CuTe kernel, it is still fundamentally [SIMT](https://en.wikipedia.org/wiki/Single_instruction,_multiple_threads) (you have many threads running in parallel).
 
 All the code in this blog can be found [here](https://github.com/Yang-YiFan/Yang-YiFan.github.io/tree/main/blogs/cute_copy/cute_copy.py).
+Note that despite CuTe TMA copy falls under the hood of CuTe copy, it is a completely different beast and we already covered it in a previous blog [Using TMA Load, Prefetch, and Multicast Load in CuTe](../cute_tma/cute_tma.md).
+This blog focuses on the generic and basic CuTe copy that uses [ld.global](https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-ld), [st.shared](https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-st), [cp.async](https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-cp-async), etc. instructions.
 
 ## 1. Working Example
 
