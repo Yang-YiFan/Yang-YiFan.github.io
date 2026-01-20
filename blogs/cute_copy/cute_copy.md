@@ -27,6 +27,7 @@ The way we partition the tensor to each thread is shown in the following figure:
 
 Essentially each thread loads a `1x8` tile of the GMEM tensor.
 In the following sections, we will show 4 ways to do this simple task.
+They should all be functionally and performance-wise equivalent.
 And we will use [CuTe DSL](https://docs.nvidia.com/cutlass/latest/media/docs/pythonDSL/cute_dsl_api.html) to write the kernel.
 
 ## 2. Approach 1: Traditional CUDA C++ Style
@@ -196,7 +197,7 @@ def cute_copy_kernel_3(
     # create the TV-layout to represent the thread partitioning
     # (T, V) -> (M, K)
     TV_layout = cute.make_layout(((NUM_THREAD_PER_ROW, CTA_M), NUM_VAL_PER_THREAD), stride=((CTA_M * NUM_VAL_PER_THREAD, 1), CTA_M))
-    tAgA = cute.composition(gA, TV_layout) # (T, V)
+    tAgA = cute.composition(gA, TV_layout) # (T, V) -> addr
     tAgA = tAgA[tidx, None] # (V)
 
     # allocate rmem tensor for this thread
@@ -231,7 +232,12 @@ Approach 2 takes an initial GMEM tensor layout of `(M, K) -> addr` and then use 
 Approach 3 *decouples* the thread partitioning and the GMEM tensor layout, first it creates the TV-layout `(T, V) -> (M, K)` and then composes it with the GMEM tensor layout `(M, K) -> addr` to get `(T, V) -> addr`.
 They will get equivalent results but depending upon the partitioning pattern, one may be more complex than the other.
 
-And you can obviously mix and match the two approaches.
+The magic of CuTe is you can specify arbitrary *valid* partitioning pattern (TV-layout) and tensor layout (GMEM tensor layout) and it will just always work functionally.
+This can be easier seen from approach 3 where partitioning is represented by TV-layout and tensor layout `gA` is another independent layout.
+Composing these two layouts should always give us the desired/correct composed layout `(T, V) -> addr`.
+But they may vary in performance due to different memory access patterns.
+
+And you can obviously mix and match the two partitioning approaches.
 Approach 3 uses layout algebra do the CTA level partitioning.
 It then uses TV-layout to do the thread level partitioning.
 The `T` in the TV-layout doesn't necessarily mean a CUDA thread, it could be a CTA, a cluster, a warp, etc.
@@ -239,6 +245,11 @@ It simply represents a mode we want to partition the tensor into.
 
 
 ## 5. Approach 4: Using TV-Layout + TiledCopy
+
+You may think using TV-layout + Composition + indexing is still too low level that involves CuTe algebra.
+CuTe `TiledCopy` is designed exactly to abstract away the underlying algebra manipulation part and provide a high level interface to do the copy.
+You can refer to my previous blog [Using TMA Load, Prefetch, and Multicast Load in CuTe](../cute_tma/cute_tma.md) for the details of `CopyAtom` and `TiledCopy`.
+The code is as follows:
 
 ```python
 # Approach 4: Using TV-Layout + TiledCopy
@@ -282,6 +293,37 @@ def cute_copy_kernel_4(
         cute.print_tensor(rA)
 ```
 
+The `copy_atom` specifies the copy instruction we want to use and in this case a simple `ld.global`.
+`TiledCopy` tries to copy to RF a tile (of shape `(CTA_M, CTA_K)`) at a time.
+How exactly is the copy tile work distributed among the threads?
+The TV-layout we specified!
+Hence `TiledCopy` creation takes in the tile shape `(CTA_M, CTA_K)` and the TV-layout `(T, V) -> (M, K)`.
+Each call to the `TiledCopy` will copy the entire `(CTA_M, CTA_K)` tile using 128 threads with each thread responsible for a `(TileM=1, TileK=NUM_VAL_PER_THREAD)` tile of the GMEM tensor.
+
+But the composition and thread indexing have to happen somewhere right?
+Yes. `thr_copy = tiled_copy.get_slice(tidx)` embeds the thread indexing information into the `thr_copy` object.
+And `tAgA = thr_copy.partition_S(gA)` does the actual composition and thread indexing into `gA`.
+So the final `tAgA` tensor is a thread partitioned tile (of shape `(TileK=NUM_VAL_PER_THREAD)`) of the GMEM tensor for thread `tidx`.
+
+On the copy destination side we are doing something slightly different but essentially trying to get the destination RF tensor to have compatible shape (`((TileM, TileK), RestM, RestK)`) with `tAgA`.
+Instead of calling `cute.basic_copy` we use `cute.copy` with specified `tiled_copy` object to do the copy.
+`cute.copy` will essentially do a loop over `(RestM, RestK)` modes and do a copy of shape `(TileM=1, TileK=NUM_VAL_PER_THREAD)` at a time.
+
+In this way, the user is totally abstracted from the underlying algebra manipulation and can just focus on the generic partitioning and copy logic.
 
 ## 6. Summary
 
+In this blog, we showed 4 equivalent ways to copy a GMEM tensor into RF using CuTe:
+1. Traditional CUDA C++ style where we do index calculation manually.
+2. Using CuTe layout algebra to do the tensor partitioning + CuTe copy.
+3. Using TV-Layout + Composition to do the tensor partitioning + CuTe copy.
+4. Using TV-Layout + TiledCopy to do the tensor partitioning + CuTe tiled copy.
+
+And the key philosophical points I want to convey are:
+- There are many equivalent ways to do the same copy operation in CuTe. One should choose the approach that is most productive and intuitive for the specific use case.
+- Partitioning a tensor in CuTe can either be done through layout algebra or through TV-layout + composition.
+- Partitioning is hierarchical and decoupled. You can do cluster/CTA/warp/thread level partitioning independently using different partitioning patterns. You can mix and match the two partitioning approaches at any level.
+- The tensor partitioning pattern is fully agnostic to the layout of the tensor and vice versa. Any combination of partitioning and layout should just work functionally and performance could vary.
+- Fundamentally, you are still writing SIMT code. Many of the layout manipulation is done at compile time (due to constant folding, etc.). But the CuTe kernel code (especially copy operation) is still running in parallel on all threads.
+
+Even though the example we use in this blog is very simple, I hope it's helpful when you are writing more complex SIMT code in CuTe (e.g. GEMM epilog, Attention softmax, etc.).

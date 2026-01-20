@@ -85,7 +85,7 @@ def cute_copy_kernel_3(
     # create the TV-layout to represent the thread partitioning
     # (T, V) -> (M, K)
     TV_layout = cute.make_layout(((NUM_THREAD_PER_ROW, CTA_M), NUM_VAL_PER_THREAD), stride=((CTA_M * NUM_VAL_PER_THREAD, 1), CTA_M))
-    tAgA = cute.composition(gA, TV_layout) # (T, V)
+    tAgA = cute.composition(gA, TV_layout) # (T, V) -> addr
     tAgA = tAgA[tidx, None] # (V)
 
     # allocate rmem tensor for this thread
