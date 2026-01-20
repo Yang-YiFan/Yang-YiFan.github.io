@@ -6,7 +6,8 @@ layout: default
 
 I plan to write blogs during my process of learning CUDA/Cutlass/Cute/Triton programming. Stay tuned for more!
 
-- ### [[Latest] GPU Memory Consistency Model](./memory_model/memory_model.md)
+- ### [[Latest] 4 Ways to Do CuTe Copy](./cute_copy/cute_copy.md)
+- ### [GPU Memory Consistency Model](./memory_model/memory_model.md)
 - ### [Tensor Core MMA Swizzle Layout](./mma_swizzle/mma_swizzle.md)
 - ### [Using Programmatic Dependent Launch (PDL) to Reduce End-to-End Latency](./pdl/pdl.md)
 - ### [CuTe Layout and Tensor](./cute_layout/cute_layout.md)

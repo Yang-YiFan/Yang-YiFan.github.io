@@ -147,12 +147,12 @@ It is a layout that represents the mapping from `(T, V)` to `(M, K)` (the tensor
 In our example, we have 128 threads and 8 values per thread.
 The figure below shows the desirable TV-Layout for our example.
 
-![TV-Layout](./figures/TV-Layout.png)
+![TV-Layout](./figures/tv-layout.png)
 
-The top figure shows the inverse TV-Layout, which is the mapping from `(M, K)` to `(T, V)`.
+The left figure shows the inverse TV-Layout, which is the mapping from `(M, K)` to `(T, V)`.
 This is easier for human to understand and it's basically the partitioning pattern we designed in [Sec. 1](#1-working-example).
-In reality, the kernel actual needs the TV-Layout rather than the inverse TV-Layout, which is shown at the bottom.
-The TV-Layout it describes is: `((16, 8), 8) : ((64, 1), 8)`.
+In reality, the kernel actual needs the TV-Layout rather than the inverse TV-Layout, which is shown at the right.
+The TV-Layout it describes is: `((16, 8), 8) : ((64, 1), 8)` (we come up with that manually).
 We can follow the method we described in [CuTe Layout and Tensor](../cute_layout/cute_layout.md) to validate the TV-Layout is indeed what we want.
 
 ```bash
@@ -227,8 +227,8 @@ Then we index into the composed layout with thread id `tidx` to get the tile of 
 The final `tAgA` tensor is a tile (of shape `(V=NUM_VAL_PER_THREAD)`) of the original `gA` tensor.
 The rest of the code stays the same.
 
-Both approach 2 and approach 3 try to get this composed layout of `(T, V) -> addr` and index into it with thread id.
-Approach 2 takes an initial GMEM tensor layout of `(M, K) -> addr` and then use layout algebra to manipulate the layout to get `(T, V) -> addr`.
+Both [approach 2](#3-approach-2-using-cute-layout-algebra) and approach 3 try to get this composed layout of `(T, V) -> addr` and index into it with thread id.
+[Approach 2](#3-approach-2-using-cute-layout-algebra) takes an initial GMEM tensor layout of `(M, K) -> addr` and then use layout algebra to manipulate the layout to get `(T, V) -> addr`.
 Approach 3 *decouples* the thread partitioning and the GMEM tensor layout, first it creates the TV-layout `(T, V) -> (M, K)` and then composes it with the GMEM tensor layout `(M, K) -> addr` to get `(T, V) -> addr`.
 They will get equivalent results but depending upon the partitioning pattern, one may be more complex than the other.
 
