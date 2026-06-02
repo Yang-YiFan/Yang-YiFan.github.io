@@ -998,213 +998,213 @@ def make_mnmajor_chunks():
 # (M=128, K=128) bf16 SMEM tile, laid out as a 2x2 grid of panels.
 # ---------------------------------------------------------------------------
 def make_four_levels():
-    fig = plt.figure(figsize=(20, 14))
-    gs = fig.add_gridspec(2, 2, hspace=0.42, wspace=0.22,
-                          left=0.04, right=0.96, top=0.92, bottom=0.04)
+    # Single shared axes so panel spacing and connecting arrows are fully
+    # controllable (gridspec + equal-aspect + per-panel xlim padding made the
+    # inter-panel arrows impossible to line up).
+    fig, ax = plt.subplots(figsize=(22, 16))
 
-    # Common shape parameters for Panels 1-3 — same tile drawn at the same
-    # scale so the overlay story reads cleanly.
+    # --- shared tile geometry (Panels 1-3 draw the same SMEM tile) ---
     n_m_atoms = 16
     n_k_atoms = 2
     atom_w = 4.0
     atom_h = 0.6
-    total_w = n_k_atoms * atom_w   # 8
-    total_h = n_m_atoms * atom_h   # 9.6
+    W = n_k_atoms * atom_w          # 8.0  tile width
+    H = n_m_atoms * atom_h          # 9.6  tile height
+    subtile_h = 8 * atom_h          # 4.8  (8 atoms in M)
+    subtile_w = atom_w / 4.0        # 1.0  (4 subtiles per atom along K)
 
-    subtile_h = 8 * atom_h         # covers 8 atoms in M
-    subtile_w = atom_w / 4.0       # 4 subtiles per atom along K
+    BLUE  = "#2c7fb8"               # arrow / accent colour
+    GREY  = "#555555"
 
-    # ---------------- Panel 1: SMEM tile ----------------
-    ax1 = fig.add_subplot(gs[0, 0])
-    rect = Rectangle((0, 0), total_w, total_h,
-                     facecolor="#FFF9DB", edgecolor="black",
-                     linewidth=2.5, zorder=2)
-    ax1.add_patch(rect)
-    ax1.text(total_w / 2.0, total_h / 2.0,
-             "SMEM tile\nM=128 × K=128 bf16\n256 × 128B = 32 KB",
-             ha="center", va="center", fontsize=16, fontweight="bold")
-    ax1.text(total_w / 2.0, -1.4,
-             "TMA loads the SMEM tile from GMEM",
-             ha="center", va="top", fontsize=12, style="italic",
-             color="#444444")
-    ax1.text(total_w / 2.0, total_h + 0.4,
-             "1. SMEM tile",
-             ha="center", va="bottom", fontsize=15, fontweight="bold",
-             color="#222222")
-    ax1.set_xlim(-1.0, total_w + 1.0)
-    ax1.set_ylim(-2.0, total_h + 1.4)
-    ax1.set_aspect("equal")
-    ax1.axis("off")
+    # --- panel origins (bottom-left corner of each tile) ---
+    COL = 19.0                      # column pitch (gap = COL - W = 11.0)
+    ROW = 14.5                      # row pitch
+    P1 = (0.0,  ROW)                # top-left  : SMEM tile
+    P2 = (COL,  ROW)                # top-right : swizzle atoms
+    P3 = (0.0,  0.0)                # bot-left  : MMA subtiles
+    # Panel 4 (chunks) drawn separately on the bottom-right.
 
-    # ---------------- Panel 2: Swizzle atoms ----------------
-    ax2 = fig.add_subplot(gs[0, 1])
+    def dim_labels(x0, y0, w, h, m_txt, k_txt, size_txt, size_color="#7a3"):
+        """Mark the outer box: M double-arrow on the left, K double-arrow on
+        top, and a bold byte-size tag at the top-left corner."""
+        # M (vertical, left)
+        ax.annotate("", xy=(x0 - 0.55, y0 + h), xytext=(x0 - 0.55, y0),
+                    arrowprops=dict(arrowstyle="<->", color=GREY, lw=1.4))
+        ax.text(x0 - 0.95, y0 + h / 2.0, m_txt, ha="center", va="center",
+                rotation=90, fontsize=12, color=GREY, fontweight="bold")
+        # K (horizontal, top)
+        ax.annotate("", xy=(x0 + w, y0 + h + 0.45), xytext=(x0, y0 + h + 0.45),
+                    arrowprops=dict(arrowstyle="<->", color=GREY, lw=1.4))
+        ax.text(x0 + w / 2.0, y0 + h + 0.75, k_txt, ha="center", va="bottom",
+                fontsize=12, color=GREY, fontweight="bold")
+        # byte-size tag
+        ax.text(x0 + w / 2.0, y0 + h + 1.55, size_txt, ha="center",
+                va="bottom", fontsize=13, color=size_color, fontweight="bold")
+
+    def panel_title(cx, top_y, txt):
+        ax.text(cx, top_y, txt, ha="center", va="bottom",
+                fontsize=16, fontweight="bold", color="#222222")
+
+    def caption(cx, bot_y, txt):
+        ax.text(cx, bot_y, txt, ha="center", va="top", fontsize=12,
+                style="italic", color="#444444")
+
+    # ===================== Panel 1: SMEM tile =====================
+    x0, y0 = P1
+    ax.add_patch(Rectangle((x0, y0), W, H, facecolor="#FFF9DB",
+                           edgecolor="black", linewidth=2.5, zorder=2))
+    ax.text(x0 + W / 2.0, y0 + H / 2.0, "SMEM tile",
+            ha="center", va="center", fontsize=18, fontweight="bold")
+    dim_labels(x0, y0, W, H, "M=128", "K=128", "= 32 KB")
+    panel_title(x0 + W / 2.0, y0 + H + 2.4, "1. SMEM tile")
+    caption(x0 + W / 2.0, y0 - 0.9, "TMA loads the SMEM tile from GMEM")
+
+    # ===================== Panel 2: Swizzle atoms =====================
+    x0, y0 = P2
     for m in range(n_m_atoms):
         for k in range(n_k_atoms):
-            x = k * atom_w
-            y = (n_m_atoms - 1 - m) * atom_h
-            r = Rectangle((x, y), atom_w, atom_h,
-                          facecolor=_atom_fill(m, k), edgecolor=ATOM_EDGE,
-                          linewidth=2.0, zorder=2)
-            ax2.add_patch(r)
-    outer = Rectangle((0, 0), total_w, total_h,
-                      facecolor="none", edgecolor="black",
-                      linewidth=2.0, zorder=3)
-    ax2.add_patch(outer)
+            x = x0 + k * atom_w
+            y = y0 + (n_m_atoms - 1 - m) * atom_h
+            ax.add_patch(Rectangle((x, y), atom_w, atom_h,
+                                   facecolor=_atom_fill(m, k),
+                                   edgecolor=ATOM_EDGE, linewidth=2.0,
+                                   zorder=2))
+    ax.add_patch(Rectangle((x0, y0), W, H, facecolor="none",
+                           edgecolor="black", linewidth=2.0, zorder=3))
+    dim_labels(x0, y0, W, H, "M=128", "K=128", "= 32 KB")
+    panel_title(x0 + W / 2.0, y0 + H + 2.4, "2. Swizzle atoms")
+    # pull out one atom to the right
+    pull_w, pull_h = atom_w * 0.95, atom_h * 2.2
+    pull_x, pull_y = x0 + W + 1.8, y0 + H - pull_h
+    ax.add_patch(Rectangle((pull_x, pull_y), pull_w, pull_h,
+                           facecolor=ATOM_FILL_A, edgecolor=ATOM_EDGE,
+                           linewidth=2.0, zorder=4, clip_on=False))
+    ax.annotate("", xy=(pull_x, pull_y + pull_h / 2.0),
+                xytext=(x0 + W + 0.05, y0 + H - atom_h / 2.0),
+                arrowprops=dict(arrowstyle="->", color=GREY, lw=1.2))
+    ax.text(pull_x + pull_w / 2.0, pull_y - 0.35,
+            "one swizzle atom\nM=8 × K=64 bf16\n= 8×128B = 1024 B",
+            ha="center", va="top", fontsize=11)
+    caption(x0 + W / 2.0, y0 - 0.9,
+            "SMEM tile = 16 × 2 = 32 swizzle atoms\n"
+            "(stacking atoms is TMA-friendly)")
 
-    # Pull-out one atom to the side with shape annotation
-    pull_x = total_w + 1.6
-    pull_y = total_h - 1.6
-    pull_w = atom_w * 0.9
-    pull_h = atom_h * 1.8
-    pa = Rectangle((pull_x, pull_y), pull_w, pull_h,
-                   facecolor=ATOM_FILL_A, edgecolor=ATOM_EDGE,
-                   linewidth=2.0, zorder=4)
-    ax2.add_patch(pa)
-    ax2.annotate("",
-                 xy=(pull_x, pull_y + pull_h / 2.0),
-                 xytext=(total_w - 0.05, total_h - atom_h / 2.0),
-                 arrowprops=dict(arrowstyle="->", color="#555555", lw=1.0),
-                 zorder=4)
-    ax2.text(pull_x + pull_w / 2.0,
-             pull_y - 0.35,
-             "one atom\nM=8 × K=64 bf16\n= 1024 B",
-             ha="center", va="top", fontsize=11)
-
-    ax2.text(total_w / 2.0, -1.4,
-             "SMEM tile = 16 × 2 = 32 swizzle atoms\n"
-             "Atom = M=8 × K=64 bf16 = 1024 B\n"
-             "(stacking atoms is TMA-friendly)",
-             ha="center", va="top", fontsize=12, style="italic",
-             color="#444444")
-    ax2.text(total_w / 2.0, total_h + 0.4,
-             "2. Swizzle atoms",
-             ha="center", va="bottom", fontsize=15, fontweight="bold",
-             color="#222222")
-    ax2.set_xlim(-1.0, total_w + 6.0)
-    ax2.set_ylim(-2.8, total_h + 1.4)
-    ax2.set_aspect("equal")
-    ax2.axis("off")
-
-    # ---------------- Panel 3: MMA subtiles overlay ----------------
-    ax3 = fig.add_subplot(gs[1, 0])
-    # atoms layer (translucent so overlay reads clearly)
+    # ===================== Panel 3: MMA subtiles =====================
+    x0, y0 = P3
     for m in range(n_m_atoms):
         for k in range(n_k_atoms):
-            x = k * atom_w
-            y = (n_m_atoms - 1 - m) * atom_h
-            r = Rectangle((x, y), atom_w, atom_h,
-                          facecolor=_atom_fill(m, k), edgecolor=ATOM_EDGE,
-                          linewidth=2.0, alpha=0.6, zorder=2)
-            ax3.add_patch(r)
-            edge = Rectangle((x, y), atom_w, atom_h,
-                             facecolor="none", edgecolor=ATOM_EDGE,
-                             linewidth=2.0, zorder=3)
-            ax3.add_patch(edge)
-    # red MMA subtile borders — uniform line weight, no highlighted subtile.
+            x = x0 + k * atom_w
+            y = y0 + (n_m_atoms - 1 - m) * atom_h
+            ax.add_patch(Rectangle((x, y), atom_w, atom_h,
+                                   facecolor=_atom_fill(m, k),
+                                   edgecolor=ATOM_EDGE, linewidth=2.0,
+                                   alpha=0.6, zorder=2))
+            ax.add_patch(Rectangle((x, y), atom_w, atom_h, facecolor="none",
+                                   edgecolor=ATOM_EDGE, linewidth=2.0,
+                                   zorder=3))
     for m_tile in range(2):
         for k_tile in range(8):
             k_atom_idx = k_tile // 4
             k_within = k_tile % 4
-            x = k_atom_idx * atom_w + k_within * subtile_w
-            y = total_h - (m_tile + 1) * subtile_h
-            r = Rectangle((x, y), subtile_w, subtile_h,
-                          facecolor="none", edgecolor=SUBTILE_EDGE,
-                          linewidth=SUBTILE_LW, zorder=5)
-            ax3.add_patch(r)
-    ax3.text(total_w / 2.0, -1.4,
-             "SMEM tile = 2 × 8 = 16 MMA subtiles\n"
-             "MMA subtile = M=64 × K=16 bf16 = 64 × 32B\n"
-             "(one tcgen05.mma per MMA subtile)",
-             ha="center", va="top", fontsize=12, style="italic",
-             color="#444444")
-    ax3.text(total_w / 2.0, total_h + 0.4,
-             "3. MMA subtiles",
-             ha="center", va="bottom", fontsize=15, fontweight="bold",
-             color="#222222")
-    ax3.set_xlim(-1.0, total_w + 1.0)
-    ax3.set_ylim(-2.8, total_h + 1.4)
-    ax3.set_aspect("equal")
-    ax3.axis("off")
+            x = x0 + k_atom_idx * atom_w + k_within * subtile_w
+            y = y0 + H - (m_tile + 1) * subtile_h
+            ax.add_patch(Rectangle((x, y), subtile_w, subtile_h,
+                                   facecolor="none", edgecolor=SUBTILE_EDGE,
+                                   linewidth=SUBTILE_LW, zorder=5))
+    dim_labels(x0, y0, W, H, "M=128", "K=128", "= 32 KB")
+    panel_title(x0 + W / 2.0, y0 + H + 2.4, "3. MMA subtiles")
+    # pull out one MMA subtile to the right (mirrors the atom pull-out),
+    # vertically centred so the 3->4 arrow downstream is horizontal.
+    msub_w, msub_h = 1.5, subtile_h
+    msub_x = x0 + W + 1.8
+    msub_y = y0 + (H - msub_h) / 2.0
+    ax.add_patch(Rectangle((msub_x, msub_y), msub_w, msub_h,
+                           facecolor="#F2F2F2", edgecolor=SUBTILE_EDGE,
+                           linewidth=SUBTILE_LW, zorder=4))
+    # arrow from the (m=0,k=0) MMA subtile (top-left of P3) to the pull-out
+    ax.annotate("", xy=(msub_x, msub_y + msub_h / 2.0),
+                xytext=(x0 + subtile_w, y0 + H - subtile_h / 2.0),
+                arrowprops=dict(arrowstyle="->", color=GREY, lw=1.2))
+    ax.text(msub_x + msub_w / 2.0, msub_y - 0.35,
+            "one MMA subtile\nM=64 × K=16 bf16\n= 64×32B",
+            ha="center", va="top", fontsize=11)
+    caption(x0 + W / 2.0, y0 - 0.9,
+            "SMEM tile = 2 × 8 = 16 MMA subtiles\n"
+            "(one tcgen05.mma per MMA subtile)")
 
-    # ---------------- Panel 4: 8x16B chunks (zoom) ----------------
-    ax4 = fig.add_subplot(gs[1, 1])
-    n_m_chunks = 8
-    n_k_chunks = 2
-    chunk_w = 1.8
-    chunk_h = 0.9
+    # ===================== Panel 4: 8x16B chunks (zoom) =====================
+    n_m_chunks, n_k_chunks = 8, 2
+    chunk_w, chunk_h = 2.0, 1.0
+    Wc, Hc = n_k_chunks * chunk_w, n_m_chunks * chunk_h   # 4.0 x 8.0
+    p4x = COL + 1.5
+    p4y = (H - Hc) / 2.0                                  # vertically centre vs P3
     cmap = plt.get_cmap("tab20")
-    total_w_c = n_k_chunks * chunk_w
-    total_h_c = n_m_chunks * chunk_h
     for m in range(n_m_chunks):
         for k in range(n_k_chunks):
-            x = k * chunk_w
-            y = (n_m_chunks - 1 - m) * chunk_h
+            x = p4x + k * chunk_w
+            y = p4y + (n_m_chunks - 1 - m) * chunk_h
             idx = m * n_k_chunks + k
-            color = cmap(idx % 20)
-            r, g, b, _ = color
+            r, g, b, _ = cmap(idx % 20)
             light = (r * 0.40 + 0.60, g * 0.40 + 0.60, b * 0.40 + 0.60)
-            rect = Rectangle((x, y), chunk_w, chunk_h,
-                             facecolor=light, edgecolor=CHUNK_EDGE,
-                             linewidth=CHUNK_LW, zorder=2)
-            ax4.add_patch(rect)
-            ax4.text(x + chunk_w / 2.0, y + chunk_h * 0.5,
-                     f"({m},{k})",
-                     ha="center", va="center", fontsize=10,
-                     fontweight="bold", zorder=3)
-    outer = Rectangle((0, 0), total_w_c, total_h_c,
-                      facecolor="none", edgecolor=SUBTILE_EDGE,
-                      linewidth=SUBTILE_LW, zorder=4)
-    ax4.add_patch(outer)
-    ax4.text(total_w_c / 2.0, -1.0,
-             "MMA subtile = 8 × 2 = 16 chunks\n"
-             "8×16B chunk (16 B contiguous K, 8 rows M)\n"
-             "(what the descriptor describes)\n"
-             "(Panel 4 zooms into Panel 3's subtile (m=0, k=0))",
-             ha="center", va="top", fontsize=12, style="italic",
-             color="#444444")
-    ax4.text(total_w_c / 2.0, total_h_c + 0.3,
-             "4. 8×16B chunks (one MMA subtile zoomed)",
-             ha="center", va="bottom", fontsize=15, fontweight="bold",
-             color="#222222")
-    ax4.set_xlim(-1.0, total_w_c + 4.0)
-    ax4.set_ylim(-3.0, total_h_c + 1.2)
-    ax4.set_aspect("equal")
-    ax4.axis("off")
+            ax.add_patch(Rectangle((x, y), chunk_w, chunk_h, facecolor=light,
+                                   edgecolor=CHUNK_EDGE, linewidth=CHUNK_LW,
+                                   zorder=2))
+            ax.text(x + chunk_w / 2.0, y + chunk_h / 2.0, f"({m},{k})",
+                    ha="center", va="center", fontsize=10, fontweight="bold",
+                    zorder=3)
+    ax.add_patch(Rectangle((p4x, p4y), Wc, Hc, facecolor="none",
+                           edgecolor=SUBTILE_EDGE, linewidth=SUBTILE_LW,
+                           zorder=4))
+    dim_labels(p4x, p4y, Wc, Hc, "M=64", "K=16", "= 64×32B")
+    panel_title(p4x + Wc / 2.0, p4y + Hc + 2.4,
+                "4. 8×16B chunks")
+    caption(p4x + Wc / 2.0, p4y - 0.9,
+            "MMA subtile = 8 × 2 = 16 chunks\n"
+            "8×16B chunk = 16 B contiguous K × 8 rows M\n"
+            "(what the descriptor describes)")
 
-    # ---------------- Connecting arrows between panels ----------------
-    # Arrows live on the figure (axes-fraction transform), not on any axes.
-    def fig_arrow(p0, p1, label, dy=0.0):
-        arr = FancyArrowPatch(p0, p1,
-                              transform=fig.transFigure,
-                              arrowstyle="->",
-                              mutation_scale=22,
-                              color="#2c7fb8",
-                              linewidth=2.0)
-        fig.patches.append(arr)
-        mx = (p0[0] + p1[0]) / 2.0
-        my = (p0[1] + p1[1]) / 2.0 + dy
-        fig.text(mx, my, label,
-                 ha="center", va="center", fontsize=11,
-                 color="#2c7fb8", fontweight="bold",
-                 bbox=dict(boxstyle="round,pad=0.25",
-                           facecolor="white",
-                           edgecolor="#2c7fb8",
-                           linewidth=1.0))
+    # ===================== connecting arrows =====================
+    def big_arrow(p0, p1, label, lx, ly):
+        ax.annotate("", xy=p1, xytext=p0,
+                    arrowprops=dict(arrowstyle="-|>", color=BLUE, lw=2.6,
+                                    mutation_scale=26), zorder=6)
+        ax.text(lx, ly, label, ha="center", va="center", fontsize=12,
+                color=BLUE, fontweight="bold", zorder=7,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+                          edgecolor=BLUE, linewidth=1.2))
 
-    # Panel 1 -> Panel 2  (horizontal, top row)
-    fig_arrow((0.46, 0.72), (0.54, 0.72),
-              "build with swizzle atoms\n(TMA partitioning)")
-    # Panel 2 -> Panel 3  (diagonal, top-right -> bottom-left)
-    fig_arrow((0.72, 0.50), (0.28, 0.46),
-              "partition into MMA subtiles\n(partition_A)")
-    # Panel 3 -> Panel 4  (horizontal, bottom row)
-    fig_arrow((0.46, 0.24), (0.54, 0.24),
-              "describe in 8×16B chunks\n(the descriptor)")
+    # 1 -> 2 : horizontal, top row. End short of P2 so the arrowhead clears
+    #          P2's left-side M-dimension bracket (at P2[0]-0.95..-0.55).
+    a_start = P1[0] + W + 0.4
+    a_end   = P2[0] - 2.6
+    big_arrow((a_start, P1[1] + H / 2.0),
+              (a_end,   P2[1] + H / 2.0),
+              "build with\nswizzle atoms\n(TMA partitioning)",
+              (a_start + a_end) / 2.0, P1[1] + H / 2.0)
+    # 2 -> 3 : diagonal, from P2's bottom edge down-left to P3's top edge
+    s23 = (P2[0] + 1.5, P2[1] - 0.4)
+    e23 = (P3[0] + W * 0.6, P3[1] + H + 0.6)
+    big_arrow(s23, e23,
+              "partition into\nMMA subtiles\n(partition_A)",
+              (s23[0] + e23[0]) / 2.0 + 1.2, (s23[1] + e23[1]) / 2.0 + 0.4)
+    # 3 -> 4 : horizontal, bottom row — from the MMA-subtile pull-out toward
+    #          P4, ending short of P4's left-side M-dimension bracket.
+    b_start = msub_x + msub_w + 0.3
+    b_end   = p4x - 2.4
+    big_arrow((b_start, msub_y + msub_h / 2.0),
+              (b_end,   p4y + Hc / 2.0),
+              "describe in\n8×16B chunks\n(the descriptor)",
+              (b_start + b_end) / 2.0, msub_y + msub_h / 2.0)
 
-    # ---------------- Overall title ----------------
-    fig.suptitle("Four nested levels of granularity "
+    # ===================== title / framing =====================
+    ax.set_title("Four nested levels of granularity "
                  "(K-major Swizzle 128B example)",
-                 fontsize=20, fontweight="bold", y=0.975)
+                 fontsize=20, fontweight="bold", pad=18)
+    # right edge must include Panel 2's swizzle-atom pull-out, else it clips
+    ax.set_xlim(-2.5, (COL + W + 1.8 + atom_w * 0.95) + 2.0)
+    ax.set_ylim(-2.6, ROW + H + 3.4)
+    ax.set_aspect("equal")
+    ax.axis("off")
 
     out = os.path.join(OUT_DIR, "four_levels.png")
     fig.savefig(out, dpi=DPI, bbox_inches="tight", facecolor="white")

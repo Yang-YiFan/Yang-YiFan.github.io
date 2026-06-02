@@ -5,6 +5,7 @@ layout: default
 # Blackwell MMA SMEM Descriptor
 
 *Disclaimer: The content of this blog reflects my personal experiences and opinions while learning GPU programming in my own time. All information presented is publicly available and does not represent the views or positions of NVIDIA Corporation or any of its affiliates.*
+
 *Disclaimer2: This blog is written by Claude with heavy heavy human (me) supervision and editing. So the probability of this blog being AI slop is low.*
 
 ## 0. Introduction
@@ -40,23 +41,26 @@ The fields that we'll care about in this blog are:
 
 - **`layout_type`** (bits 61–63) — the swizzle mode: `SWIZZLE_NONE=0`, `SWIZZLE_128B=2`, `SWIZZLE_64B=4`, `SWIZZLE_32B=6`. This is the same set of 8 swizzle layouts from the [previous blog](../mma_swizzle/mma_swizzle.md#3-mma-swizzle-layout).
 - **`start_address`** (bits 0–13) — the operand's starting byte address in SMEM, divided by 16. So the granularity is **16 B** (one `uint128`) and the field can address up to `2^14 * 16 = 256 KB` of SMEM, comfortably bigger than Blackwell's 232 KB.
-- **`leading_byte_offset`** / **LBO** (bits 16–29) — one of the two strides the hardware uses to walk the operand. Also stored in 16-B units.
-- **`stride_byte_offset`** / **SBO** (bits 32–45) — the other stride. Also in 16-B units.
+- **`leading_byte_offset`** / **LBO** (bits 16–29) — one of the two strides the hardware uses to walk the operand. Also stored in 16-B units. It's the stride along the contiguous dimension (K for K-major, M for MN-major).
+- **`stride_byte_offset`** / **SBO** (bits 32–45) — the other stride. Also in 16-B units. It's the stride along the non-contiguous dimension (M for K-major, K for MN-major).
 
 The remaining fields (`base_offset`, `lbo_mode`, `version`) are configuration knobs that don't change across `tcgen05.mma` instructions of a single kernel; I'll leave them alone here.
 
-`SBO` and `LBO` are strides *inside* one `tcgen05.mma` operand; `start_address` is what moves the descriptor *between* operands. To make that concrete we first need to name the four levels of granularity the descriptor lives between — which is the next section.
+`SBO` and `LBO` are strides *inside* one `tcgen05.mma` operand; `start_address` is what moves the descriptor *between* operands. To make that concrete we first need to name the four levels of granularity a SMEM tile can be represented as — which is the next section.
 
 ## 2. The Big Picture: Four Nested Levels of Granularity
 
-Throughout this blog, four nested levels of "tile" keep showing up. They are the language the descriptor speaks. Each level lives inside the previous one:
+Throughout this blog, four nested levels of "tile" keep showing up. 
+They are primitive building blocks (with different sizes and purposes) that a SMEM tile can be represented as.
+The table below uses the K-major `(M=128, K=128)` K-major SMEM tile as an example:
+
 
 | Level | Shape (K-major bf16, Swizzle 128B) | What it is |
 |---|---|---|
-| **SMEM tile**       | `M=128 × K=128` (= `256 × 128 B`)    | The high-level SMEM region one CTA stages from GMEM. The natural unit for a GEMM A operand. |
-| **Swizzle atom**    | `8 × 128 B` (= `M=8 × K=64` bf16)    | The building block of the [`Swizzle 128B` layout](../mma_swizzle/mma_swizzle.md#314-k-major-swizzle-128b). **TMA-friendly**: TMA loads the SMEM tile one swizzle atom at a time. |
-| **MMA subtile**     | `M=64 × K=16` (= `64 × 32 B`)         | The operand of one `tcgen05.mma` instruction. The MMA partitions the SMEM tile into MMA subtiles. |
-| **8×16B chunk**     | `8 × 16 B` (= 8 rows of one `uint128`) | The primitive unit the MMA hardware addresses. Each chunk lives entirely inside one swizzle atom. |
+| **SMEM tile**       | `M=128 × K=128` (= `128 × 256 B`)    | The high-level SMEM region one TMA stages copies from GMEM. |
+| **Swizzle atom**    | `8 × 128 B` (= `M=8 × K=64` bf16)    | The building block of the [`Swizzle 128B` layout](../mma_swizzle/mma_swizzle.md#314-k-major-swizzle-128b). **TMA-friendly**: Each TMA instruction loads multiple swizzle atoms at a time. |
+| **MMA subtile**     | `M=64 × K=16` (= `64 × 32 B`)         | The A operand of one `tcgen05.mma` instruction. |
+| **8×16B chunk**     | `8 × 16 B` (= 8 rows of one `uint128`) | The primitive unit the MMA hardware accesses. Each chunk lives entirely inside one swizzle atom. |
 
 The figure below shows all four levels for a `(M=128, K=128)` K-major Swizzle 128B SMEM tile:
 
@@ -64,19 +68,14 @@ The figure below shows all four levels for a `(M=128, K=128)` K-major Swizzle 12
 
 How the four levels interact:
 
-- **Stacking swizzle atoms is how we construct the SMEM tile for TMA.** The SMEM tile is *literally* `tile_to_shape(Layout_K_SW128_Atom, (M=128, K=128))` — a 16×2 grid of swizzle atoms. TMA reads/writes a swizzle atom at a time.
-- **The MMA consumes the SMEM tile through MMA subtiles**, one `tcgen05.mma` instruction per MMA subtile. So we partition the SMEM tile into MMA subtiles (`partition_A`).
-- **Each MMA subtile is in turn a grid of 8×16B chunks.** The MMA hardware doesn't see swizzle atoms — it addresses SMEM in 8×16B chunks. One swizzle atom holds 64 chunks; one MMA subtile holds 16 chunks; chunks within one MMA subtile come from one swizzle atom (for K-major in our example) or from a few (for MN-major).
-- **In theory we could build the whole SMEM tile out of 8×16B chunks directly** — that would be the layout the descriptor "wants" — but TMA wouldn't like it. The right thing is to keep the SMEM tile swizzle-atom-centric for TMA, and *convert* one MMA subtile at a time into its 8×16B-chunk layout when we build the descriptor.
+1. The SMEM tile (`(M=128, K=128)`) is the high-level SMEM region one DMA stage copies from GMEM.
+2. **Stacking swizzle atoms is how we construct the SMEM tile for TMA.** The SMEM tile is *literally* `tile_to_shape(Layout_K_SW128_Atom, (M=128, K=128))` — a 16×2 grid of `8x128B` swizzle atoms (blue or orange boxes in the figure). A single TMA instruction (box) loads multiple swizzle atoms (stacked along M) at a time.
+3. **The MMA consumes the SMEM tile through MMA subtiles**, one `tcgen05.mma` instruction per MMA subtile (red boxes in the figure). For bf16, one `tcgen05.mma` instruction processes an `M=64, K=16` A subtile. And the entire SMEM tile is partitioned into 2x8=16 MMA subtiles. This is often referred to as the MMA partitioned layout `tCsA = ((MMA_M, MMA_K), Num_MMA_M, Num_MMA_K) = ((64, 16), 2, 8)`.
+4. **Each MMA subtile is in turn a grid of 8×16B chunks.** The MMA hardware doesn't see swizzle atoms — it accesses SMEM in `8×16B` chunks. One swizzle atom holds 8 chunks; one MMA subtile holds 8x2=16 chunks.
 
-That conversion is the entire point of CuTe's descriptor machinery:
+> **The SMEM descriptor (`layout_type`, `SBO`, and `LBO`) describes how the `8x16B` chunks are laid out within one MMA subtile in SMEM.**
 
-> **CuTe converts the swizzle-atom-centric SMEM layout (TMA-friendly) into an 8×16B-chunk layout per MMA subtile (descriptor-friendly), and the strides *between* MMA subtiles drive the descriptor advance.**
-
-In descriptor terms:
-
-- `layout_type`, `SBO`, and `LBO` together encode the 8×16B-chunk layout for *one* MMA subtile.
-- `start_address` then walks across MMA subtiles.
+> **Each MMA subtile is described by one SMEM descriptor. Between different MMA subtiles, the `8x16B` chunks are laid out in the same way. The only difference is the `start_address` of the subtile. So SMEM descriptor update between MMA subtiles is `start_address` update in the descriptor.**
 
 In the figures throughout the rest of the blog, the conventions are:
 
