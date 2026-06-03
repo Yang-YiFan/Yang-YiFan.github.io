@@ -693,7 +693,7 @@ def make_mnmajor_tile():
             ax.text(x + atom_w / 2.0, y + atom_h * 0.55,
                     f"({m},{k})",
                     ha="center", va="center", fontsize=11)
-            storage_idx = k * n_m_atoms + m
+            storage_idx = m * n_k_atoms + k    # K-first: K varies fastest
             ax.text(x + atom_w / 2.0, y + atom_h * 0.42,
                     f"#{storage_idx}",
                     ha="center", va="center", fontsize=10, color="#555555")
@@ -717,7 +717,7 @@ def make_mnmajor_tile():
                 xytext=(0.5 * atom_w, total_h + 0.20),
                 arrowprops=dict(arrowstyle="->", color="#2c7fb8", lw=1.4))
     ax.text(atom_w, total_h + 0.42,
-            "K-atom stride = 2048 B",
+            "K-atom stride = 1024 B",
             ha="center", va="bottom", fontsize=14, color="#2c7fb8")
 
     mstride_x = -1.4
@@ -726,7 +726,7 @@ def make_mnmajor_tile():
                 xytext=(mstride_x, total_h - 0.5 * atom_h),
                 arrowprops=dict(arrowstyle="->", color="#c0392b", lw=1.4))
     ax.text(mstride_x - 0.15, total_h - atom_h,
-            "M-atom stride\n= 1024 B",
+            "M-atom stride\n= 16384 B",
             ha="right", va="center", fontsize=14, color="#c0392b")
 
     # Limits/aspect fixed before the legend so the auto-sized legend box can
@@ -743,9 +743,9 @@ def make_mnmajor_tile():
     ], width=None, line_h=1.15)
 
     ax.text(legend_x, total_h - 3.1,
-            "Storage order in SMEM\n(column-major, M-first):\n"
-            "#0=(0,0) → #1=(1,0) → #2=(0,1) → #3=(1,1) → ...\n"
-            "→ #30=(0,15) → #31=(1,15)",
+            "Storage order in SMEM\n(K-first — maximizes TMA box):\n"
+            "#0=(0,0) → #1=(0,1) → ... → #15=(0,15)\n"
+            "→ #16=(1,0) → ... → #31=(1,15)",
             ha="left", va="top", fontsize=11,
             bbox=dict(boxstyle="round,pad=0.3",
                       facecolor="#f0f0f0", edgecolor="black", linewidth=0.6))
@@ -775,8 +775,8 @@ def make_mnmajor_subtiles(advance_overlay=False):
     fig, ax = plt.subplots(figsize=(19, 11))
 
     byte_offsets = [
-        [0,    4096,  8192,  12288, 16384, 20480, 24576, 28672],
-        [1024, 5120,  9216,  13312, 17408, 21504, 25600, 29696],
+        [0,     2048,  4096,  6144,  8192,  10240, 12288, 14336],
+        [16384, 18432, 20480, 22528, 24576, 26624, 28672, 30720],
     ]
 
     total_w = n_k_atoms * atom_w
@@ -895,7 +895,7 @@ def make_mnmajor_subtiles(advance_overlay=False):
                         arrowprops=dict(arrowstyle="->", color="#c0392b",
                                         lw=1.5))
         ax.text(total_w / 2.0, y_arrow + 0.25,
-                "K-tile advance (uniform +4096 B)",
+                "K-tile advance (uniform +2048 B)",
                 ha="center", va="bottom", fontsize=14, color="#c0392b",
                 fontweight="bold")
 
@@ -904,7 +904,7 @@ def make_mnmajor_subtiles(advance_overlay=False):
                     xytext=(-2.5, total_h - 0.5 * subtile_h),
                     arrowprops=dict(arrowstyle="->", color="#2c7fb8", lw=1.8))
         ax.text(-2.7, total_h - subtile_h,
-                "M-tile advance\n(uniform +1024 B)",
+                "M-tile advance\n(+16384 B)",
                 ha="right", va="center", fontsize=14, color="#2c7fb8",
                 fontweight="bold")
 
@@ -993,7 +993,7 @@ def make_mnmajor_chunks():
                 xytext=(0.5 * chunk_w, sbo_y),
                 arrowprops=dict(arrowstyle="->", color="#c0392b", lw=1.8))
     ax.text(chunk_w, sbo_y + 0.18,
-            "SBO = 2048 B  (K-atom stride)",
+            "SBO = 1024 B  (K-atom stride)",
             ha="center", va="bottom", fontsize=14, color="#c0392b",
             fontweight="bold")
 
@@ -1006,7 +1006,7 @@ def make_mnmajor_chunks():
                 arrowprops=dict(arrowstyle="->", color="#888888", lw=1.2,
                                 linestyle="dashed"))
     ax.text(lbo_x + 0.18, total_h - chunk_h,
-            "LBO = 1024 B\n(M-atom stride —\nunused, only 1\nM-atom along M)",
+            "LBO = 0\n(MN-atom stride —\nunused, M=64 is\n1 MN-atom)",
             ha="left", va="center", fontsize=12, color="#666666",
             style="italic")
 

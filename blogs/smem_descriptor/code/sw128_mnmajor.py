@@ -1,167 +1,126 @@
 """
-Companion script for blogs/smem_descriptor/smem_descriptor.md, Sec. 2.
+Companion script for blogs/smem_descriptor/smem_descriptor.md, Sec. 4.
 
-Builds the (M=128, K=128) bf16 MN-major Swizzle 128B SMEM layout and analyzes
-the tcgen05.mma SMEM descriptor for each of the 16 subtiles
-(2 M-tiles x 8 K-tiles, MMA atom M=64, K=16).
+Like sw128_kmajor.py, every number is derived with REAL CuTe DSL layout algebra
+(cute.logical_divide / zipped_divide / recast_layout / get / crd2idx / size) —
+no hand-typed strides, no re-implemented layout math. For the (M=128, K=128)
+bf16 MN-major Swizzle 128B SMEM tile fed to the M=64 `tcgen05.mma`.
 
-Run:
+Two things differ from the K-major case:
+
+  1. The swizzle atom is M=64 (contiguous) × K=8, so the canonical Major::MN
+     reshape puts SBO/LBO in different stride slots (LBO = stride<0,1>,
+     SBO = stride<1,1>).
+
+  2. ATOM ORDERING. For MN-major the contiguous (swizzled) dimension is M, so to
+     maximize the TMA box we stack atoms ALONG K FIRST (cute.tile_to_shape with
+     order=(1,0)) — K-atoms become contiguous in SMEM. The K-major script used
+     order=(0,1) (M-atoms contiguous). Same rule both times: stack contiguously
+     along the *non-swizzled* dimension.
+
+A consequence the CuTe algebra makes obvious: the M=64 MMA operand is exactly
+ONE MN-atom wide, so the canonical layout's M-atom-count mode has size 1 and
+`LBO = stride<0,1> = 0` (degenerate / unused). The 16384 B M-tile *advance* is
+carried by `start_address`, not by LBO.
+
+Run (CuTe DSL venv; no GPU needed):
     python sw128_mnmajor.py
-
-See sw128_kmajor.py for an explanation of the methodology. The only thing that
-changes for MN-major is the swizzle atom shape (M=64 x K=8 instead of M=8 x K=64)
-and which canonical-layout stride slots become SBO and LBO.
 """
 
-from dataclasses import dataclass
-from typing import Tuple
+import cutlass
+import cutlass.cute as cute
 
 
-@dataclass(frozen=True)
-class Layout:
-    shape: Tuple
-    stride: Tuple
-
-    def __str__(self):
-        return f"{self.shape}:{self.stride}"
+# --- plain helpers (see sw128_kmajor.py for why they are not @cute.jit) -----
+def stride_at(layout, mode):
+    return int(cute.get(layout, mode=mode).stride)
 
 
-# ----------------------------------------------------------------------------
-# Layout_MN_SW128_Atom<bf16> from cute/atom/mma_traits_sm90_gmma.hpp:64
-#   Sw<3,4,3> o Layout<Shape<_64, _8>, Stride<_1, _64>>    (in bf16 elements)
-# Atom is M=64 (contiguous) x K=8.
-# ----------------------------------------------------------------------------
-ATOM_M = 64
-ATOM_K = 8
-ATOM_STRIDE = (1, ATOM_M)         # MN-major: stride 1 along M, stride 64 along K
-
-# CuTe DSL equivalent (compare with sm100_utils.make_smem_layout_a for MN-major):
-#   sw_atom = cute.make_composed_layout(
-#       cute.make_swizzle(3, 4, 3), 0,
-#       cute.make_layout((ATOM_M, ATOM_K), stride=ATOM_STRIDE))
-
-TILE_M = 128
-TILE_K = 128
-M_ATOMS = TILE_M // ATOM_M    # 2
-K_ATOMS = TILE_K // ATOM_K    # 16
-ATOM_SIZE_EL = ATOM_M * ATOM_K  # 512 elements = 1024 B
-
-# tile_to_shape with col-major (M-first) atom ordering:
-#   M-atom stride = atom_size = 512 elements
-#   K-atom stride = M_ATOMS * atom_size = 2 * 512 = 1024 elements
-SMEM_LAYOUT = Layout(
-    shape =((ATOM_M, M_ATOMS), (ATOM_K, K_ATOMS)),
-    stride=((1,      ATOM_SIZE_EL),
-            (ATOM_M, M_ATOMS*ATOM_SIZE_EL)),
-)
-# Concretely: ((64, 2), (8, 16)) : ((1, 512), (64, 1024))   [bf16 elements]
+def advance_table(adv, n_m, n_k, bpe):
+    return [[int(cute.crd2idx((m, k), adv)) * bpe for k in range(n_k)]
+            for m in range(n_m)]
 
 
-# ----------------------------------------------------------------------------
-# Recast to u128 along the contiguous (M) direction.
-# ----------------------------------------------------------------------------
-U128_PER_ATOM_M = ATOM_M // 8     # 64 / 8 = 8
-
-U128_LAYOUT = Layout(
-    shape =((U128_PER_ATOM_M, M_ATOMS), (ATOM_K, K_ATOMS)),
-    stride=((1,                U128_PER_ATOM_M * ATOM_K),     # M-atom stride = 8*8 = 64 u128
-            (U128_PER_ATOM_M,  M_ATOMS*U128_PER_ATOM_M*ATOM_K)),
-)
-# Concretely: ((8, 2), (8, 16)) : ((1, 64), (8, 128))   [u128]
-# Sanity:
-#   M-atom stride = 8 u128 * 8 K-rows = 64 u128 = 1024 B ✓
-#   K-atom stride = 2 M-atoms * 64 u128/M-atom = 128 u128 = 2048 B ✓
-
-
-# ----------------------------------------------------------------------------
-# Canonical-layout strides for the *first subtile* (M=64, K=16 MN-major).
-#
-# u128 layout of the first subtile:
-#   shape  ((8, 1), (8, 2))     // ((within-atom M, M-atom-idx-in-subtile=1),
-#                              //   (within-atom K, K-atom-idx-in-subtile=2))
-#   stride ((1, 64), (8, 128))
-#
-# make_umma_desc<Major::MN>:
-#   canonical_layout = logical_divide(layout, Tile<Layout<_8,_1>, Layout<_8,_1>>)
-#   SBO = stride<1,1>(canonical_layout)
-#   LBO = stride<0,1>(canonical_layout)
-# ----------------------------------------------------------------------------
-SUBTILE_M = 64
-SUBTILE_K = 16
-M_ATOMS_PER_SUBTILE = SUBTILE_M // ATOM_M    # 1
-K_ATOMS_PER_SUBTILE = SUBTILE_K // ATOM_K    # 2
-
-FIRST_SUBTILE_U128 = Layout(
-    shape =((U128_PER_ATOM_M, M_ATOMS_PER_SUBTILE),
-            (ATOM_K,          K_ATOMS_PER_SUBTILE)),
-    stride=((1,                U128_PER_ATOM_M * ATOM_K),     # 64 u128
-            (U128_PER_ATOM_M,  M_ATOMS * U128_PER_ATOM_M * ATOM_K)),  # 8, 128 u128
-)
-
-# Major::MN: SBO = stride<1,1>, LBO = stride<0,1>
-SBO_U128 = FIRST_SUBTILE_U128.stride[1][1]
-LBO_U128 = FIRST_SUBTILE_U128.stride[0][1]
-SBO = SBO_U128 * 16
-LBO = LBO_U128 * 16
-
-
-# ----------------------------------------------------------------------------
-# Descriptor advance.
-#
-# Outer-mode strides for the partitioned tensor (in u128):
-#   M-tile: shape 2, stride = M-atom-stride = 64 u128 (= 1024 B == LBO)
-#   K-tile: shape 8, stride = 2 K-atoms = 256 u128 (= 4096 B == 2*SBO)
-# Both are flat affine -- no hierarchical mode like the K-major case.
-# ----------------------------------------------------------------------------
-NUM_M_TILES = TILE_M // SUBTILE_M    # 2
-NUM_K_TILES = TILE_K // SUBTILE_K    # 8
-
-M_TILE_STRIDE_U128 = M_ATOMS_PER_SUBTILE * (U128_PER_ATOM_M * ATOM_K)   # 64
-K_TILE_STRIDE_U128 = K_ATOMS_PER_SUBTILE * (M_ATOMS * U128_PER_ATOM_M * ATOM_K)  # 256
-
-
-def subtile_offset_bytes(m_tile: int, k_tile: int) -> int:
-    return (m_tile * M_TILE_STRIDE_U128 + k_tile * K_TILE_STRIDE_U128) * 16
-
-
-# ----------------------------------------------------------------------------
-def main():
-    print("=" * 78)
-    print("MN-major Swizzle 128B, SMEM tile M=128, K=128, bf16, tcgen05.mma M=64")
-    print("=" * 78)
+def report(smem, u128, sub, adv, canon, bpe):
+    lbo = stride_at(canon, [0, 1])     # canonical ((8,n),(8,k)):((1,LBO),(8,SBO))
+    sbo = stride_at(canon, [1, 1])
+    print("=== MN-major Swizzle 128B, SMEM M=128 K=128 bf16, tcgen05.mma M=64 ===")
+    print("  (all layouts produced by CuTe layout algebra; K-first atom order)")
     print()
-    print(f"  Swizzle 128B atom (bf16):      M={ATOM_M}, K={ATOM_K}, size=1024 B")
-    print(f"  SMEM tile:                     M={TILE_M}, K={TILE_K}, "
-          f"= {M_ATOMS}x{K_ATOMS} atoms = {M_ATOMS*K_ATOMS} atoms = "
-          f"{M_ATOMS*K_ATOMS*1024} B")
-    print(f"  tcgen05.mma instruction:       M={SUBTILE_M}, K={SUBTILE_K} (MN-major)")
-    print(f"  partitioning:                  "
-          f"{NUM_M_TILES} M-tiles x {NUM_K_TILES} K-tiles "
-          f"= {NUM_M_TILES*NUM_K_TILES} tcgen05.mma instructions")
+    print("SMEM layout (bf16 elements):", smem)
+    print("recast to u128            :", u128)
+    print("per-MMA-subtile (bf16)    :", sub)
+    print("advance modes (bf16)      :", adv, " = (M-tile, K-tile)")
+    print("canonical (u128)          :", canon,
+          f"   [size={int(cute.size(canon))}]")
     print()
-    print(f"  SMEM layout (bf16 elements):  {SMEM_LAYOUT}")
-    print(f"  recast to u128:                "
-          f"{U128_LAYOUT}")
+    print("descriptor for subtile (m_tile=0, k_tile=0):")
+    print("  layout_type   = 2  (SWIZZLE_128B)")
+    print("  start_address = 0x00000          (= 0 B from base)")
+    print(f"  SBO = stride<1,1> = {sbo:>4} u128 = {sbo*16:>5} B   (K-atom stride)")
+    print(f"  LBO = stride<0,1> = {lbo:>4} u128 = {lbo*16:>5} B   "
+          f"(M-atom stride — 0/unused, M=64 is 1 MN-atom)")
     print()
-    print(f"  canonical-layout strides for *first subtile* (u128):")
-    print(f"    stride<1,1> = SBO = {SBO_U128:>3} u128 = {SBO} B   (K-atom stride)")
-    print(f"    stride<0,1> = LBO = {LBO_U128:>3} u128 = {LBO} B   (M-atom stride)")
-    print()
-    print("  descriptor for subtile (m_tile=0, k_tile=0):")
-    print(f"    layout_type   = 2  (SWIZZLE_128B)")
-    print(f"    start_address = 0x00000          (= 0 B from base)")
-    print(f"    SBO           = {SBO_U128:>3} u128         (= {SBO} B)")
-    print(f"    LBO           = {LBO_U128:>3} u128         (= {LBO} B)")
-    print()
-    print("  byte offsets from desc[0, 0]:")
-    print("            " + "".join(f"k={k:<5} " for k in range(NUM_K_TILES)))
-    for m in range(NUM_M_TILES):
-        row = f"   m={m}    "
-        for k in range(NUM_K_TILES):
-            row += f"{subtile_offset_bytes(m, k):>5} B "
-        print(row)
-    print()
+    tbl = advance_table(adv, 2, 8, bpe)
+    print("byte offsets from desc[0,0] (start_address advance):")
+    print("        " + "".join(f"k={k:<7}" for k in range(8)))
+    for m in range(2):
+        print(f"  m={m}  " + " ".join(f"{tbl[m][k]:<8}" for k in range(8)))
+
+    # --- self-check against the blog text (Sec. 4.3 / 4.4) -----------------
+    assert (stride_at(smem, [0, 0]), stride_at(smem, [0, 1]),
+            stride_at(smem, [1, 0]), stride_at(smem, [1, 1])) == (1, 8192, 64, 512)
+    assert sbo * 16 == 1024
+    assert lbo == 0                                # M=64 == 1 MN-atom -> LBO unused
+    assert tbl[0] == [0, 2048, 4096, 6144, 8192, 10240, 12288, 14336]
+    assert tbl[1] == [16384, 18432, 20480, 22528, 24576, 26624, 28672, 30720]
+    assert tbl[1][0] == 8 * tbl[0][1]              # contiguous tiling
+    print("\nAll asserts passed — CuTe layout algebra matches the blog text.")
+
+
+@cute.jit
+def analyze():
+    BPE = 2   # bytes per bf16 element
+    # As in sw128_kmajor.py: partition (zipped_divide) FIRST in bf16 element
+    # units, then recast only the per-subtile slice to u128. (For MN-major the
+    # *contiguous* dim is M, so the recast collapses M 64->8 u128; K stays 16.)
+
+    # Level 1+2: MN-major Swizzle 128B atom (M=64 contiguous × K=8) -> SMEM
+    # tile, stacking atoms along K first (order=(1,0)) — maximizes the TMA box.
+    atom = cute.make_layout((64, 8), stride=(1, 64))           # (64,8):(1,64)        bf16
+    smem = cute.tile_to_shape(atom, (128, 128), order=(1, 0))
+    #   smem = ((64,2),(8,16)):((1,8192),(64,512))   [(within-M,M-atom),(within-K,K-atom)] bf16
+
+    # Level 3: MMA partition on the ELEMENT-unit tile, MMA subtile = (M=64, K=16) elements.
+    zd  = cute.zipped_divide(smem, (64, 16))
+    #   zd  = ((64,16),(2,8)):((1,64),(8192,1024))             ((subtile),(M-tile,K-tile))
+    sub = cute.get(zd, mode=[0])     # one MMA subtile (bf16 elements)
+    #   sub = (64,16):(1,64)                                   M=64, K=16 elements
+    adv = cute.get(zd, mode=[1])     # inter-subtile advance (bf16 elements)
+    #   adv = (2,8):(8192,1024)                                (M-tile, K-tile) strides
+
+    # Recast the per-subtile slice to u128 (8 bf16 per u128, along contiguous M):
+    sub_u = cute.recast_layout(128, 16, sub)
+    #   sub_u = (8,16):(1,8)                                   M=64 elem -> 8 u128, K=16 (flat)
+    # logical_divide rule (see sw128_kmajor.py): size N ÷ tiler T -> (T, N/T) =
+    # (within-tile, #tiles); the #tiles sub-mode's stride is the inter-atom
+    # stride. Tiler here is (8, 8) -- note SBO/LBO sit in different slots than K:
+    canon = cute.logical_divide(sub_u, (cute.make_layout(8), cute.make_layout(8)))
+    #   canonical template (CuTe docs):  ((8, n    ), (8, k    )) : ((1, LBO), (8, SBO))
+    #   logical_divide returns        :  ((8, RestM), (8, RestK)) : ((1, LBO), (8, SBO))
+    #   concrete                      :  ((8, 1    ), (8, 2    )) : ((1, 0  ), (8, 64 ))
+    #     8     = SwizzleAtomMN / SwizzleAtomK (fixed by the B128 swizzle)
+    #     RestM = #M-atoms in subtile = 8/8  = 1 -> stride 0  = LBO = stride<0,1>  (1 MN-atom!)
+    #     RestK = #K-atoms in subtile = 16/8 = 2 -> stride 64 = SBO = stride<1,1>
+    #   LBO is "the stride of the M-rest sub-mode" — and since RestM == 1 (M=64 is
+    #   exactly one MN-atom), that stride is 0: LBO is unused.
+
+    # whole-tile recast, used ONLY for the "recast to u128" display line below:
+    u128 = cute.recast_layout(128, 16, smem)
+    #   u128 = ((8,2),(8,16)):((1,1024),(8,64))
+
+    report(smem, u128, sub, adv, canon, BPE)
 
 
 if __name__ == "__main__":
-    main()
+    analyze()
