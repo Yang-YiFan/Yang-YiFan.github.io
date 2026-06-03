@@ -94,19 +94,48 @@ def _draw_legend_box(ax, x, y_top, items, width=4.6, line_h=1.05,
         kind  : "atom" | "subtile" | "chunk" | "smem_tile"
         label : multi-line text
         fill  : optional pastel fill colour (for "chunk")
+
+    width : box width in data units. Pass ``None`` to auto-size the box to the
+            widest label line — in that case the axis limits and aspect must
+            already be set, so the measured text extents map correctly into
+            data coordinates.
     """
     n  = len(items)
     pad = 0.30
     box_h = n * line_h + pad
-    box   = Rectangle((x, y_top - box_h), width, box_h,
-                      facecolor="white", edgecolor="#666666",
-                      linewidth=0.8, zorder=4)
-    ax.add_patch(box)
+    text_x_off = 0.30 + swatch_w + 0.20      # left pad + swatch + gap to text
 
+    # Place the label texts first so the box can be auto-sized around them.
+    rows = []
     cur_y = y_top - pad
     for it in items:
-        sx = x + 0.30
         sy = cur_y - swatch_h - 0.10
+        t = ax.text(x + text_x_off, sy + swatch_h / 2.0,
+                    it["label"], ha="left", va="center", fontsize=11,
+                    zorder=6)
+        rows.append((it, sy, t))
+        cur_y -= line_h
+
+    if width is None:
+        fig = ax.figure
+        fig.canvas.draw()                    # realise a renderer to measure text
+        rend = fig.canvas.get_renderer()
+        inv = ax.transData.inverted()
+        max_right = x + text_x_off
+        for _it, _sy, t in rows:
+            bb = t.get_window_extent(renderer=rend)
+            x1, _ = inv.transform((bb.x1, bb.y0))
+            max_right = max(max_right, x1)
+        width = (max_right - x) + 0.35       # trailing pad
+
+    # Box drawn after the text but at a lower zorder, so it sits behind it.
+    box = Rectangle((x, y_top - box_h), width, box_h,
+                    facecolor="white", edgecolor="#666666",
+                    linewidth=0.8, zorder=4)
+    ax.add_patch(box)
+
+    for it, sy, _t in rows:
+        sx = x + 0.30
         if it["kind"] == "atom":
             # Two-cell strip: ATOM_FILL_A on left, ATOM_FILL_B on right.
             half = swatch_w / 2.0
@@ -141,10 +170,6 @@ def _draw_legend_box(ax, x, y_top, items, width=4.6, line_h=1.05,
         else:
             raise ValueError(it["kind"])
 
-        ax.text(sx + swatch_w + 0.20, sy + swatch_h / 2.0,
-                it["label"], ha="left", va="center", fontsize=11,
-                zorder=6)
-        cur_y -= line_h
     return box_h
 
 
@@ -245,10 +270,10 @@ def make_descriptor_bits():
 def make_kmajor_tile():
     n_m_atoms = 16
     n_k_atoms = 2
-    atom_w = 4.0
+    atom_w = 8.0
     atom_h = 1.0
 
-    fig, ax = plt.subplots(figsize=(15, 11))
+    fig, ax = plt.subplots(figsize=(16, 11))
 
     for m in range(n_m_atoms):
         for k in range(n_k_atoms):
@@ -258,54 +283,64 @@ def make_kmajor_tile():
                              facecolor=_atom_fill(m, k), edgecolor=ATOM_EDGE,
                              linewidth=ATOM_LW)
             ax.add_patch(rect)
-            ax.text(x + atom_w / 2.0, y + atom_h * 0.62, f"({m}, {k})",
-                    ha="center", va="center", fontsize=12)
+            # Coordinate + storage index on a single line, e.g. "(0, 0)  #0".
             storage_idx = k * n_m_atoms + m
-            ax.text(x + atom_w / 2.0, y + atom_h * 0.30, f"#{storage_idx}",
-                    ha="center", va="center", fontsize=11, color="#555555")
+            cx = x + atom_w / 2.0
+            cy = y + atom_h * 0.5
+            ax.text(cx - 0.25, cy, f"({m}, {k})",
+                    ha="right", va="center", fontsize=12)
+            ax.text(cx + 0.25, cy, f"#{storage_idx}",
+                    ha="left", va="center", fontsize=11, color="#555555")
 
     total_w = n_k_atoms * atom_w
     total_h = n_m_atoms * atom_h
 
     # K arrow top
-    ax.annotate("", xy=(total_w + 0.05, total_h + 1.0),
-                xytext=(0, total_h + 1.0),
+    ax.annotate("", xy=(total_w + 0.05, total_h + 1.6),
+                xytext=(0, total_h + 1.6),
                 arrowprops=dict(arrowstyle="->", color="black", lw=1.2))
-    ax.text(total_w / 2.0, total_h + 1.2,
+    ax.text(total_w / 2.0, total_h + 1.8,
             "K  (K=0 → K=127, contiguous)",
             ha="center", va="bottom", fontsize=14)
 
-    # M arrow left
-    ax.annotate("", xy=(-3.0, 0), xytext=(-3.0, total_h),
+    # M arrow left (axis, nearest the tile)
+    m_arrow_x = -1.5
+    ax.annotate("", xy=(m_arrow_x, 0), xytext=(m_arrow_x, total_h),
                 arrowprops=dict(arrowstyle="->", color="black", lw=1.2))
-    ax.text(-3.25, total_h / 2.0, "M  (M=0 → M=127)",
+    ax.text(m_arrow_x - 0.30, total_h / 2.0, "M  (M=0 → M=127)",
             ha="center", va="center", fontsize=14, rotation=90)
 
-    # M-atom stride arrow
-    mstride_x = -1.5
+    # M-atom stride arrow — just to the LEFT of the black M axis arrow.
+    mstride_x = -2.2
     ax.annotate("",
                 xy=(mstride_x, total_h - 1.5 * atom_h),
                 xytext=(mstride_x, total_h - 0.5 * atom_h),
                 arrowprops=dict(arrowstyle="->", color="#c0392b", lw=1.4))
-    ax.text(mstride_x - 0.15, total_h - atom_h,
+    ax.text(mstride_x - 0.20, total_h - atom_h,
             "M-atom stride\n= 1024 B",
             ha="right", va="center", fontsize=14, color="#c0392b")
 
-    # K-atom stride arrow
+    # K-atom stride arrow — lifted clear of the tile's top edge.
     ax.annotate("",
-                xy=(atom_w + atom_w / 2.0, total_h + 0.05),
-                xytext=(atom_w / 2.0,      total_h + 0.05),
+                xy=(atom_w + atom_w / 2.0, total_h + 0.55),
+                xytext=(atom_w / 2.0,      total_h + 0.55),
                 arrowprops=dict(arrowstyle="->", color="#2c7fb8", lw=1.4))
-    ax.text(atom_w, total_h + 0.30,
+    ax.text(atom_w, total_h + 0.70,
             "K-atom stride = 16384 B",
             ha="center", va="bottom", fontsize=14, color="#2c7fb8")
 
-    # Sidebar legend
+    # Limits/aspect are fixed before the legend so the auto-sized legend box
+    # can measure its label widths in final data coordinates.
+    ax.set_xlim(-7.0, total_w + 14.0)
+    ax.set_ylim(-0.5, total_h + 3.6)
+    ax.set_aspect("equal")
+
+    # Sidebar legend (auto-sized to its text).
     legend_x = total_w + 0.8
     _draw_legend_box(ax, legend_x, total_h - 0.1, [
         {"kind": "smem_tile", "label": SMEM_TILE_LABEL},
         {"kind": "atom",      "label": ATOM_LABEL_KMAJOR},
-    ], width=5.0, line_h=1.15)
+    ], width=None, line_h=1.15)
 
     # Storage order legend (below)
     ax.text(legend_x, total_h - 3.0,
@@ -317,14 +352,11 @@ def make_kmajor_tile():
                       facecolor="#f0f0f0", edgecolor="black", linewidth=0.6))
 
     # Title
-    ax.text(total_w / 2.0, total_h + 1.9,
+    ax.text(total_w / 2.0, total_h + 2.7,
             "(M=128, K=128) bf16 K-major Swizzle 128B SMEM tile\n"
             "16 M-atoms × 2 K-atoms = 32 atoms",
             ha="center", va="bottom", fontsize=18, fontweight="bold")
 
-    ax.set_xlim(-4.5, total_w + 6.5)
-    ax.set_ylim(-0.4, total_h + 2.8)
-    ax.set_aspect("equal")
     ax.axis("off")
 
     _save(fig, "kmajor_tile.png")
@@ -382,8 +414,10 @@ def make_kmajor_subtiles(advance_overlay=False):
         x0 = k_atom * atom_w
         for j in range(1, n_chunks_k_per_atom):
             x = x0 + j * chunk_w_k
+            # Thick enough (1.5 pt) to survive the heavy down-scaling the blog
+            # applies — at 0.5 pt these lines aliased away in ~half the subtiles.
             ax.plot([x, x], [0, total_h], color="#000000",
-                    linewidth=0.5, zorder=3)
+                    linewidth=1.5, zorder=3)
 
     # --- Layer 3: redraw atom borders crisp on top of chunk grid ---
     for m in range(n_m_atoms):
@@ -460,38 +494,47 @@ def make_kmajor_subtiles(advance_overlay=False):
                     zorder=7,
                 )
 
-    # Axes — placed slightly outside the k=/m= axis-style labels.
+    # Axes — placed slightly outside the k=/m= axis-style labels. The overall
+    # SMEM-tile size (M=128, K=128) is merged into these axis labels.
     ax.annotate("", xy=(total_w + 0.05, total_h + 0.75),
                 xytext=(0, total_h + 0.75),
                 arrowprops=dict(arrowstyle="->", color="black", lw=1.2))
-    ax.text(total_w / 2.0, total_h + 0.95, "K  (contiguous)",
+    ax.text(total_w / 2.0, total_h + 0.95, "K = 128 (256 B), contiguous",
             ha="center", va="bottom", fontsize=14)
-    ax.annotate("", xy=(-1.10, 0), xytext=(-1.10, total_h),
+    ax.annotate("", xy=(-1.8, 0), xytext=(-1.8, total_h),
                 arrowprops=dict(arrowstyle="->", color="black", lw=1.2))
-    ax.text(-1.35, total_h / 2.0, "M",
+    ax.text(-2.05, total_h / 2.0, "M = 128",
             ha="center", va="center", fontsize=14, rotation=90)
 
     if advance_overlay:
-        y_arrow = total_h + 1.9
+        y_arrow = total_h + 2.7
+        kvals = [32, 32, 32, 16288, 32, 32, 32]   # advance from subtile k -> k+1
+        inset = 0.15 * subtile_w
         for k in range(7):
-            k_atom_a = k // 4
-            k_atom_b = (k + 1) // 4
-            x_a = k_atom_a * atom_w + (k % 4) * subtile_w + subtile_w / 2.0
-            x_b = k_atom_b * atom_w + ((k + 1) % 4) * subtile_w + subtile_w / 2.0
-            ax.annotate("", xy=(x_b, y_arrow), xytext=(x_a, y_arrow),
+            # Arrow sits directly above subtile k (the source of the hop),
+            # spanning that subtile's width, so each advance value lines up
+            # with the subtile it leaves from.
+            k_atom_idx = k // 4
+            k_within   = k %  4
+            x_left  = k_atom_idx * atom_w + k_within * subtile_w
+            x_right = x_left + subtile_w
+            ax.annotate("", xy=(x_right - inset, y_arrow),
+                        xytext=(x_left + inset, y_arrow),
                         arrowprops=dict(arrowstyle="->", color="#c0392b",
                                         lw=1.5))
-        ax.text(total_w / 2.0, y_arrow + 0.3,
-                "K-tile advance (non-affine): "
-                "+32, +32, +32, +16288, +32, +32, +32 B",
+            ax.text((x_left + x_right) / 2.0, y_arrow - 0.38, f"+{kvals[k]}",
+                    ha="center", va="top", fontsize=13, color="#c0392b",
+                    fontweight="bold")
+        ax.text(total_w / 2.0, y_arrow + 0.28,
+                "K-tile advance (non-affine), bytes:",
                 ha="center", va="bottom", fontsize=14, color="#c0392b",
                 fontweight="bold")
 
         ax.annotate("",
-                    xy=(-2.1, total_h - 1.5 * subtile_h),
-                    xytext=(-2.1, total_h - 0.5 * subtile_h),
+                    xy=(-3.2, total_h - 1.5 * subtile_h),
+                    xytext=(-3.2, total_h - 0.5 * subtile_h),
                     arrowprops=dict(arrowstyle="->", color="#2c7fb8", lw=1.8))
-        ax.text(-2.3, total_h - subtile_h,
+        ax.text(-3.4, total_h - subtile_h,
                 "M-tile advance\n(+8192 B)",
                 ha="right", va="center", fontsize=14, color="#2c7fb8",
                 fontweight="bold")
@@ -502,11 +545,17 @@ def make_kmajor_subtiles(advance_overlay=False):
         title = ("(M=128, K=128) K-major Swizzle 128B tile — "
                  "16 tcgen05.mma subtiles (2 M-tiles × 8 K-tiles)")
 
-    title_y = total_h + (2.7 if advance_overlay else 1.7)
+    title_y = total_h + (3.8 if advance_overlay else 1.7)
     ax.text(total_w / 2.0, title_y, title,
             ha="center", va="bottom", fontsize=18, fontweight="bold")
 
-    # Sidebar legend (atom + subtile + smem tile)
+    # Limits/aspect are fixed before the legend so the auto-sized legend box
+    # can measure its label widths in final data coordinates.
+    ax.set_xlim(-5.5, total_w + 14.0)
+    ax.set_ylim(-0.4, total_h + (4.6 if advance_overlay else 2.6))
+    ax.set_aspect("equal")
+
+    # Sidebar legend (atom + subtile + smem tile), auto-sized to its text.
     legend_x = total_w + 0.6
     _draw_legend_box(ax, legend_x, total_h - 0.1, [
         {"kind": "smem_tile", "label": SMEM_TILE_LABEL},
@@ -514,11 +563,8 @@ def make_kmajor_subtiles(advance_overlay=False):
         {"kind": "subtile",   "label": SUBTILE_LABEL_KMAJOR},
         {"kind": "chunk",     "label": CHUNK_LABEL,
          "fill": "#FFFFFF"},
-    ], width=5.0, line_h=1.15)
+    ], width=None, line_h=1.15)
 
-    ax.set_xlim(-3.4, total_w + 6.0)
-    ax.set_ylim(-0.4, total_h + (3.6 if advance_overlay else 2.6))
-    ax.set_aspect("equal")
     ax.axis("off")
 
     name = "kmajor_advance.png" if advance_overlay else "kmajor_subtiles.png"
@@ -589,9 +635,10 @@ def make_kmajor_chunks():
             ha="center", va="bottom", fontsize=14, color="#2c7fb8",
             fontweight="bold")
 
-    ax.text(total_w / 2.0, -0.6, "K (chunk_k = 0, 1)  contiguous",
+    # Overall subtile size (M=64, K=16) is merged into the axis labels.
+    ax.text(total_w / 2.0, -0.6, "K = 16 (32 B), contiguous  (chunk_k = 0, 1)",
             ha="center", va="top", fontsize=14)
-    ax.text(-0.5, total_h / 2.0, "M (chunk_m = 0..7)",
+    ax.text(-0.5, total_h / 2.0, "M = 64  (chunk_m = 0..7)",
             ha="center", va="center", fontsize=14, rotation=90)
 
     ax.text(total_w / 2.0, -1.4,
@@ -605,17 +652,20 @@ def make_kmajor_chunks():
             "8×2 = 16 chunks of 8×16B each",
             ha="center", va="bottom", fontsize=17, fontweight="bold")
 
-    # Legend
+    # Limits/aspect fixed before the legend so the auto-sized legend box can
+    # measure its label widths in final data coordinates.
+    ax.set_xlim(-1.5, total_w + 10.0)
+    ax.set_ylim(-2.2, total_h + 2.0)
+    ax.set_aspect("equal")
+
+    # Legend (auto-sized to its text).
     legend_x = total_w + 3.0
     _draw_legend_box(ax, legend_x, total_h - 0.1, [
         {"kind": "subtile", "label": SUBTILE_LABEL_KMAJOR},
         {"kind": "chunk",   "label": CHUNK_LABEL,
          "fill": "#FDD49E"},
-    ], width=4.4, line_h=1.15)
+    ], width=None, line_h=1.15)
 
-    ax.set_xlim(-1.5, total_w + 8.0)
-    ax.set_ylim(-2.2, total_h + 2.0)
-    ax.set_aspect("equal")
     ax.axis("off")
 
     _save(fig, "kmajor_chunks.png")
@@ -657,9 +707,9 @@ def make_mnmajor_tile():
     ax.text(total_w / 2.0, total_h + 1.2, "K  (K=0 → K=127)",
             ha="center", va="bottom", fontsize=14)
 
-    ax.annotate("", xy=(-3.5, 0), xytext=(-3.5, total_h),
+    ax.annotate("", xy=(-5.0, 0), xytext=(-5.0, total_h),
                 arrowprops=dict(arrowstyle="->", color="black", lw=1.2))
-    ax.text(-3.75, total_h / 2.0, "M  (M=0 → M=127, contiguous)",
+    ax.text(-5.25, total_h / 2.0, "M  (M=0 → M=127, contiguous)",
             ha="center", va="center", fontsize=14, rotation=90)
 
     ax.annotate("",
@@ -675,16 +725,22 @@ def make_mnmajor_tile():
                 xy=(mstride_x, total_h - 1.5 * atom_h),
                 xytext=(mstride_x, total_h - 0.5 * atom_h),
                 arrowprops=dict(arrowstyle="->", color="#c0392b", lw=1.4))
-    ax.text(mstride_x + 0.15, total_h - atom_h,
+    ax.text(mstride_x - 0.15, total_h - atom_h,
             "M-atom stride\n= 1024 B",
-            ha="left", va="center", fontsize=14, color="#c0392b")
+            ha="right", va="center", fontsize=14, color="#c0392b")
 
-    # Sidebar legend
+    # Limits/aspect fixed before the legend so the auto-sized legend box can
+    # measure its label widths in final data coordinates.
+    ax.set_xlim(-5.8, total_w + 10.5)
+    ax.set_ylim(-0.5, total_h + 2.8)
+    ax.set_aspect("equal")
+
+    # Sidebar legend (auto-sized to its text).
     legend_x = total_w + 0.6
     _draw_legend_box(ax, legend_x, total_h - 0.1, [
         {"kind": "smem_tile", "label": SMEM_TILE_LABEL},
         {"kind": "atom",      "label": ATOM_LABEL_MNMAJOR},
-    ], width=5.0, line_h=1.15)
+    ], width=None, line_h=1.15)
 
     ax.text(legend_x, total_h - 3.1,
             "Storage order in SMEM\n(column-major, M-first):\n"
@@ -699,9 +755,6 @@ def make_mnmajor_tile():
             "2 M-atoms × 16 K-atoms = 32 atoms",
             ha="center", va="bottom", fontsize=18, fontweight="bold")
 
-    ax.set_xlim(-4.5, total_w + 7.0)
-    ax.set_ylim(-0.5, total_h + 2.8)
-    ax.set_aspect("equal")
     ax.axis("off")
 
     _save(fig, "mnmajor_tile.png")
@@ -758,8 +811,10 @@ def make_mnmajor_subtiles(advance_overlay=False):
         y0 = (n_m_atoms - 1 - m_atom) * atom_h
         for j in range(1, n_chunks_m_per_atom):
             y = y0 + j * chunk_h_m
+            # Thick enough (1.5 pt) to survive the heavy down-scaling the blog
+            # applies — at 0.5 pt these lines aliased away in some subtiles.
             ax.plot([0, total_w], [y, y], color="#000000",
-                    linewidth=0.5, zorder=3)
+                    linewidth=1.5, zorder=3)
 
     # Layer 3: redraw atom borders crisp on top of chunk grid
     for m in range(n_m_atoms):
@@ -824,11 +879,11 @@ def make_mnmajor_subtiles(advance_overlay=False):
     ax.annotate("", xy=(total_w + 0.05, total_h + 0.65),
                 xytext=(0, total_h + 0.65),
                 arrowprops=dict(arrowstyle="->", color="black", lw=1.2))
-    ax.text(total_w / 2.0, total_h + 0.85, "K",
+    ax.text(total_w / 2.0, total_h + 0.85, "K = 128",
             ha="center", va="bottom", fontsize=14)
-    ax.annotate("", xy=(-1.0, 0), xytext=(-1.0, total_h),
+    ax.annotate("", xy=(-1.55, 0), xytext=(-1.55, total_h),
                 arrowprops=dict(arrowstyle="->", color="black", lw=1.2))
-    ax.text(-1.20, total_h / 2.0, "M  (contiguous)",
+    ax.text(-1.80, total_h / 2.0, "M = 128 (256 B), contiguous",
             ha="center", va="center", fontsize=14, rotation=90)
 
     if advance_overlay:
@@ -845,10 +900,10 @@ def make_mnmajor_subtiles(advance_overlay=False):
                 fontweight="bold")
 
         ax.annotate("",
-                    xy=(-1.95, total_h - 1.5 * subtile_h),
-                    xytext=(-1.95, total_h - 0.5 * subtile_h),
+                    xy=(-2.5, total_h - 1.5 * subtile_h),
+                    xytext=(-2.5, total_h - 0.5 * subtile_h),
                     arrowprops=dict(arrowstyle="->", color="#2c7fb8", lw=1.8))
-        ax.text(-2.15, total_h - subtile_h,
+        ax.text(-2.7, total_h - subtile_h,
                 "M-tile advance\n(uniform +1024 B)",
                 ha="right", va="center", fontsize=14, color="#2c7fb8",
                 fontweight="bold")
@@ -863,7 +918,13 @@ def make_mnmajor_subtiles(advance_overlay=False):
     ax.text(total_w / 2.0, title_y, title,
             ha="center", va="bottom", fontsize=18, fontweight="bold")
 
-    # Sidebar legend
+    # Limits/aspect fixed before the legend so the auto-sized legend box can
+    # measure its label widths in final data coordinates.
+    ax.set_xlim(-3.2, total_w + 9.5)
+    ax.set_ylim(-0.5, total_h + (2.9 if advance_overlay else 2.6))
+    ax.set_aspect("equal")
+
+    # Sidebar legend (auto-sized to its text).
     legend_x = total_w + 0.6
     _draw_legend_box(ax, legend_x, total_h - 0.1, [
         {"kind": "smem_tile", "label": SMEM_TILE_LABEL},
@@ -871,11 +932,8 @@ def make_mnmajor_subtiles(advance_overlay=False):
         {"kind": "subtile",   "label": SUBTILE_LABEL_MNMAJOR},
         {"kind": "chunk",     "label": CHUNK_LABEL,
          "fill": "#FFFFFF"},
-    ], width=5.0, line_h=1.15)
+    ], width=None, line_h=1.15)
 
-    ax.set_xlim(-3.2, total_w + 6.5)
-    ax.set_ylim(-0.5, total_h + (2.9 if advance_overlay else 2.6))
-    ax.set_aspect("equal")
     ax.axis("off")
 
     name = "mnmajor_advance.png" if advance_overlay else "mnmajor_subtiles.png"
@@ -885,25 +943,25 @@ def make_mnmajor_subtiles(advance_overlay=False):
 # ---------------------------------------------------------------------------
 # Figure 8: mnmajor_chunks.png
 # One MN-major MMA subtile (red outer border) -> 8 x 2 = 16 pastel chunks.
-# M is horizontal, K is vertical (to keep LBO/SBO arrow conventions parallel
-# to kmajor_chunks). Chunks are 16B (along M-contiguous) x 8 (along K).
+# Vertical dim = M (contiguous, 8 chunks), horizontal dim = K (2 chunks).
+# Each chunk is 16 B (along M-contiguous) x 8 (along K).
 # ---------------------------------------------------------------------------
 def make_mnmajor_chunks():
-    n_m_chunks = 8
-    n_k_chunks = 2
-    chunk_w = 1.8
-    chunk_h = 1.4
+    n_m_chunks = 8        # M — vertical
+    n_k_chunks = 2        # K — horizontal
+    chunk_w = 2.2         # K direction (horizontal)
+    chunk_h = 1.0         # M direction (vertical)
 
-    fig, ax = plt.subplots(figsize=(18, 9))
+    fig, ax = plt.subplots(figsize=(15, 12))
 
     cmap = plt.get_cmap("tab20")
-    total_w = n_m_chunks * chunk_w
-    total_h = n_k_chunks * chunk_h
+    total_w = n_k_chunks * chunk_w        # K spans the width
+    total_h = n_m_chunks * chunk_h        # M spans the height
 
     for m in range(n_m_chunks):
         for k in range(n_k_chunks):
-            x = m * chunk_w
-            y = (n_k_chunks - 1 - k) * chunk_h
+            x = k * chunk_w
+            y = (n_m_chunks - 1 - m) * chunk_h     # m=0 at top, increasing down
             idx = k * n_m_chunks + m
             color = cmap(idx % 20)
             r, g, b, _ = color
@@ -916,7 +974,7 @@ def make_mnmajor_chunks():
                     f"({m}, {k})",
                     ha="center", va="center", fontsize=12,
                     fontweight="bold", zorder=3)
-            ax.text(x + chunk_w / 2.0, y + chunk_h * 0.32,
+            ax.text(x + chunk_w / 2.0, y + chunk_h * 0.30,
                     "16B×8",
                     ha="center", va="center", fontsize=11, color="#444444",
                     zorder=3)
@@ -927,66 +985,73 @@ def make_mnmajor_chunks():
                       linewidth=SUBTILE_LW, zorder=4)
     ax.add_patch(outer)
 
-    # SBO arrow (vertical)
-    arrow_x = total_w + 0.3
+    # SBO arrow (K-atom stride) — K is horizontal, so a horizontal arrow on top
+    # spanning one K-chunk.
+    sbo_y = total_h + 0.40
     ax.annotate("",
-                xy=(arrow_x, total_h - 1.5 * chunk_h),
-                xytext=(arrow_x, total_h - 0.5 * chunk_h),
+                xy=(1.5 * chunk_w, sbo_y),
+                xytext=(0.5 * chunk_w, sbo_y),
                 arrowprops=dict(arrowstyle="->", color="#c0392b", lw=1.8))
-    ax.text(arrow_x + 0.15, total_h - chunk_h,
-            "SBO = 2048 B\n(K-atom stride)",
-            ha="left", va="center", fontsize=14, color="#c0392b",
+    ax.text(chunk_w, sbo_y + 0.18,
+            "SBO = 2048 B  (K-atom stride)",
+            ha="center", va="bottom", fontsize=14, color="#c0392b",
             fontweight="bold")
 
-    # LBO arrow (unused inside this subtile — only 1 M-atom along M)
-    lbo_y = total_h + 0.30
+    # M-atom stride (LBO) — M is vertical; unused inside one subtile, drawn as a
+    # dashed grey vertical arrow on the right spanning one M-chunk.
+    lbo_x = total_w + 0.4
     ax.annotate("",
-                xy=(1.5 * chunk_w, lbo_y),
-                xytext=(0.5 * chunk_w, lbo_y),
+                xy=(lbo_x, total_h - 1.5 * chunk_h),
+                xytext=(lbo_x, total_h - 0.5 * chunk_h),
                 arrowprops=dict(arrowstyle="->", color="#888888", lw=1.2,
                                 linestyle="dashed"))
-    ax.text(chunk_w, lbo_y + 0.22,
-            "LBO = 1024 B  (M-atom stride — unused inside one subtile, "
-            "only 1 M-atom along M)",
-            ha="left", va="bottom", fontsize=12, color="#666666",
+    ax.text(lbo_x + 0.18, total_h - chunk_h,
+            "LBO = 1024 B\n(M-atom stride —\nunused, only 1\nM-atom along M)",
+            ha="left", va="center", fontsize=12, color="#666666",
             style="italic")
 
-    # M contiguous arrow at bottom
+    # M-contiguous arrow — M is vertical now; blue arrow on the left spanning
+    # the full M extent, pointing down (M increases downward).
+    mcont_x = -0.55
     ax.annotate("",
-                xy=(total_w - 0.1, -0.45),
-                xytext=(0.1, -0.45),
+                xy=(mcont_x, 0.1),
+                xytext=(mcont_x, total_h - 0.1),
                 arrowprops=dict(arrowstyle="->", color="#2c7fb8", lw=1.4))
-    ax.text(total_w / 2.0, -0.7,
-            "M contiguous  (within-atom, +16 B per chunk)",
-            ha="center", va="top", fontsize=14, color="#2c7fb8",
-            fontweight="bold")
+    ax.text(mcont_x - 0.30, total_h / 2.0,
+            "M = 64 (128 B), contiguous  (+16 B / chunk)",
+            ha="center", va="center", fontsize=14, color="#2c7fb8",
+            fontweight="bold", rotation=90)
 
-    ax.text(-0.65, total_h / 2.0, "K (chunk_k = 0, 1)",
-            ha="center", va="center", fontsize=14, rotation=90)
+    # K label — K is horizontal now, at the bottom.
+    ax.text(total_w / 2.0, -0.45, "K = 16  (chunk_k = 0, 1)",
+            ha="center", va="top", fontsize=14)
 
-    ax.text(total_w / 2.0, -1.9,
+    ax.text(total_w / 2.0, -1.25,
             "addr(m, k) = start_address "
             "+ m·(within-atom M stride) + k·SBO + swizzle_XOR(m, k)",
             ha="center", va="top", fontsize=13,
             bbox=dict(boxstyle="round,pad=0.4",
                       facecolor="#fff9d6", edgecolor="black", linewidth=0.6))
 
-    ax.text(total_w / 2.0, total_h + 1.6,
-            "First MMA subtile (M=64 × K=16 bf16 = 128B×16) — "
+    ax.text(total_w / 2.0, total_h + 1.4,
+            "First MMA subtile (M=64 × K=16 bf16 = 128B×16)\n"
             "8×2 = 16 chunks of 16B×8 each",
             ha="center", va="bottom", fontsize=17, fontweight="bold")
 
-    # Legend
-    legend_x = total_w + 3.0
+    # Limits/aspect fixed before the legend so the auto-sized legend box can
+    # measure its label widths in final data coordinates.
+    ax.set_xlim(-3.0, total_w + 12.0)
+    ax.set_ylim(-2.4, total_h + 3.0)
+    ax.set_aspect("equal")
+
+    # Legend (auto-sized to its text).
+    legend_x = total_w + 5.0
     _draw_legend_box(ax, legend_x, total_h - 0.1, [
         {"kind": "subtile", "label": SUBTILE_LABEL_MNMAJOR},
         {"kind": "chunk",   "label": CHUNK_LABEL,
          "fill": "#FDD49E"},
-    ], width=4.4, line_h=1.15)
+    ], width=None, line_h=1.15)
 
-    ax.set_xlim(-1.5, total_w + 8.0)
-    ax.set_ylim(-2.8, total_h + 2.4)
-    ax.set_aspect("equal")
     ax.axis("off")
 
     _save(fig, "mnmajor_chunks.png")
