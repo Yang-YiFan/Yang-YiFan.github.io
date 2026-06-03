@@ -92,79 +92,79 @@ For MN-major the absolute shapes flip — the swizzle atom is `M=64 × K=8` (`12
 ### 3.1. The SMEM tile and the swizzle atom
 
 We start with a 32 KB **SMEM tile** of shape `(M=128, K=128)` in bf16, K-major, with K-major Swizzle 128B layout.
-This is the high-level SMEM region one CTA stages from GMEM — a representative A operand of a low-batch GEMM kernel (e.g. the one in [TGV GEMM](https://github.com/flashinfer-ai/flashinfer/blob/main/include/flashinfer/gemm/tgv_gemm.cuh)).
+This is the high-level SMEM region one TMA stage copies from GMEM to SMEM in warp specialized pipeline.
 
-The SMEM tile is built out of **swizzle atoms** stacked together (this is the TMA-friendly view from the [previous blog](../mma_swizzle/mma_swizzle.md#7-swizzle-atom-layout)).
+For TMA copy, the SMEM tile is built out of **swizzle 128B atoms** stacked together (this is the TMA-friendly view from the [previous blog](../mma_swizzle/mma_swizzle.md#7-swizzle-atom-layout)).
 The K-major Swizzle 128B atom is `M=8, K=128B` (or `M=8 × K=64` bf16) — an `8×128B = 1024 B` tile.
-Our `(M=128, K=128)` SMEM tile therefore decomposes into **16 M-atoms × 2 K-atoms = 32 swizzle atoms**, stored in SMEM in column-major (M-first) atom order:
+Our `(M=128, K=128)` SMEM tile therefore decomposes into **16 M-atoms × 2 K-atoms = 32 swizzle atoms**.
+And we stack the swizzle atom along M first, then along K (i.e. stacking layout is `(16, 2) : (1, 16)`).
+Stacking is done through `tile_to_shape` function in CuTe.
+This allows maximal TMA box size as a single box can't go across two swizzle atoms along K.
+So this tile will be broken down into 2 TMA boxes (`(M=128, K=64)` formed by stacking 16 swizzle atoms along M) and we will issue 2 TMA load instructions to load the tile into SMEM with MMA compatible swizzled layout.
 
 ![kmajor tile](./figures/kmajor_tile.png)
 
 Atom `(m, k)` sits at SMEM byte offset `m * 1024 + k * 16384` from the base of the tile.
+So the swizzle atom starting address stride along M is 1024 B and along K is 16384 B.
 
 ### 3.2. The MMA subtile
 
-The MMA doesn't consume the SMEM tile in one shot — it consumes it one **MMA subtile** at a time, where an MMA subtile is the operand of a single `tcgen05.mma` instruction.
+This `(M=128, K=128)` SMEM tile participates in many MMA instructions.
+For our specific `tcgen05.mma` instruction (bf16, `M=64`), the A operand size is `(M=64, K=16)`, we call this a MMA subtile (i.e. the tile size each MMA instruction consumes).
 
-We feed our SMEM tile to the `M=64` variant of the bf16 `tcgen05.mma` instruction.
-The CuTe MMA atom is [`SM100_MMA_F16BF16_SS<M=64, N, K=16, K-major, K-major>`](https://github.com/NVIDIA/cutlass/blob/c6aeb9179c5f74a0fcdbd28527bf4b6ba8c60752/include/cute/arch/mma_sm100_umma.hpp), which corresponds to one [`tcgen05.mma.cta_group::1.kind::f16`](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma) instruction processing an `M=64, K=16` A subtile per call.
-So one MMA subtile here is `M=64 × K=16` bf16 = `64 × 32 B`.
-
-The full SMEM tile partitions into **2 M-tiles × 8 K-tiles = 16 MMA subtiles**, so 16 `tcgen05.mma` instructions are issued per CTA tile.
-Each MMA subtile spans **8 M-atoms × 1/4 of a K-atom** of the SMEM tile: along M, `M=64 = 8 × (M=8-per-atom)`; along K, `K=16 = (1/4) × (K=64-per-atom)`, so 4 K-tiles fit inside one K-atom.
+The full SMEM tile partitions into **2 M-tiles × 8 K-tiles = 16 MMA subtiles**.
+So the SMEM tile can also be represented from a MMA subtile centric view (aka the MMA partitioned layout): `((MMA_M, MMA_K), Num_MMA_M, Num_MMA_K) = ((64, 16), 2, 8)`.
+The MMA partitioned layout is often achieved through `tiled_mma.partition_A()` function in CuTe.
+It transforms the SMEM tile layout from `(M, K) = (128, 128)` to `((MMA_M, MMA_K), Num_MMA_M, Num_MMA_K)`.
 
 ![kmajor subtiles](./figures/kmajor_subtiles.png)
 
 The figure above shows three of our four levels at once: the **SMEM tile** is the whole rectangle, the **swizzle atoms** are the small light-blue boxes (the TMA-friendly stacking), and the **MMA subtiles** are the red overlays (the MMA partitioning).
-The descriptor speaks in terms of *one* MMA subtile at a time — which we'll unpack into 8×16B chunks next.
+Each MMA subtile spans 8 swizzle 128B atoms along M.
+But each MMA subtile doesn't consume the full swizzle atom along K, it only consumes 32B along K (1/4 of the swizzle 128B atom).
+The descriptor will somehow describe how a MMA subtile consumes SMEM with this stacked swizzle atom layout.
 
 ### 3.3. The descriptor for the first MMA subtile
 
-To describe the first MMA subtile (the grey one in the figure above) to the tensor core, we build a descriptor with the following fields:
+To describe the first MMA subtile (top left red box in the figure above) to the tensor core, we build a descriptor with the following fields:
 
 ```
 layout_type   = 2          (SWIZZLE_128B)
 start_address = &smem >> 4 (in 16-B units)
-SBO           = 64 u128 = 1024 B
-LBO           =  1 u128 =   16 B
+SBO           = 64 (in 16-B units) = 1024 B
+LBO           =  1 (in 16-B units) =   16 B
 ```
 
 How do `SBO` and `LBO` describe the layout of this MMA subtile?
 
-The MMA subtile is itself broken down by the tensor core into **8×16B chunks** ([Sec. 2.1 of the previous blog](../mma_swizzle/mma_swizzle.md#21-motivating-example-ampere-mma)) — this is the smallest granularity at which the MMA hardware addresses SMEM.
-For K-major, an 8×16B chunk is 8 rows along M × 16 B (= 8 bf16) along K — exactly one `uint128` per row, repeated 8 times along M.
-With `M=64, K=16` K-major, our MMA subtile contains `8 (along M) × 2 (along K) = 16` chunks arranged in an 8×2 grid:
+The Tensor Core accesses SMEM in **8×16B chunks** ([Sec. 2.1 of the previous blog](../mma_swizzle/mma_swizzle.md#21-motivating-example-ampere-mma)).
+For K-major, an 8×16B chunk is 8 rows along M × 16 B (= 8 bf16) along K.
+With `M=64, K=16` K-major, our MMA subtile contains `8 (along M) × 2 (along K) = 16` 8×16B chunks arranged in an 8×2 grid as shown in the figure below.
 
 ![kmajor chunks](./figures/kmajor_chunks.png)
 
-For the tensor core to read all 16 chunks, it needs to know how to step between adjacent chunks in both directions:
+The SMEM descriptor describes how the 16 8×16B chunks are laid out within one MMA subtile.
+`LBO` describes the stride along K (leading dimension) between adjacent 8x16B chunks and is 16 B in this case.
+`SBO` describes the stride along M (stride dimension) between adjacent 8x16B chunks and is 1024 B in this case.
+Because the `LBO` and `SBO` field in the descriptor are in 16B units, so in this case `LBO = 1` and `SBO = 64`.
+The 16B LBO denotes the stride between the first elements in two adjacent 8x16B chunks along K.
+The 1024B SBO is easy to understand as the stride between two 8x16B atom along M is just the size of a swizzle 128B atom which is 8x128B=1024B.
+As you can imagine with the `start_address` and the `SBO` and `LBO`, the Tensor Core should be able to walk through the `(M=64, K=16)` MMA subtile in SMEM by reading one 8x16B chunk at a time.
 
-- **Stepping +1 along M** (from chunk row *m* to *m+1*): jumps by one M-atom in the underlying SMEM tile, because each M-atom is exactly 8 rows tall. That's the **SBO = 1024 B**.
-- **Stepping +1 along K** (from chunk column 0 to chunk column 1): jumps by 16 B (one `uint128`) along the contiguous K dimension. That's the **LBO = 16 B**.
-
-So the absolute SMEM address of chunk `(m, k)` of this MMA subtile is
-
-```
-addr(m, k) = start_address + m * SBO + k * LBO + swizzle_XOR(m, k)
-```
-
-where `swizzle_XOR(m, k)` is the within-atom XOR pattern that the hardware applies automatically based on `layout_type = SWIZZLE_128B`.
-
-**This is why `start_address`, `layout_type`, `SBO`, and `LBO` are sufficient.**
-The `layout_type` fully determines the relative positions of chunks *within* a swizzle atom (no field needed for that).
-`SBO` and `LBO` are the only two inter-chunk strides that depend on the user's tile geometry, and they are enough because the MMA subtile is rank-2 (only M and K).
-And `start_address` anchors the whole pattern in SMEM.
-
-Note that `SBO`, `LBO`, and `layout_type` are properties of the MMA subtile **shape**; they do **not** change across the 16 `tcgen05.mma` invocations.
+One final thing to note is the swizzle `layout_type` is also required for the Tensor Core to understand the actual SMEM layout of the MMA subtile.
+Let's take the first 8x16B chunk in the MMA subtile as an example, because of swizzling, the stride between two consecutive rows in the chunk is not a uniform 128B (otherwise each row would map to the same SMEM bank, inducing bank conflicts).
+16B rows are laid out in this zigzag pattern to avoid bank conflicts (refer to [Sec. 4.1 of the previous blog](../mma_swizzle/mma_swizzle.md#314-k-major-swizzle-128b)).
+The Tensor Core hardware needs to understand this swizzle pattern to correctly load the 8x16B chunk.
+SImilarly, for the 8x16B chunk at coordinate `(0, 1)` in the MMA subtile, as long as we know the address of the first element in the chunk and the swizzle `layout_type`, we should be able to retrieve the address of all the 16B rows in the chunk.
 
 ### 3.4. The descriptors for the other 15 MMA subtiles — advance via `start_address`
 
 The other 15 MMA subtiles have **the same shape and the same `(SBO, LBO, layout_type)`**.
 The only thing that changes is **where they start in SMEM** — i.e. only `start_address`.
 
-So advancing the descriptor from one MMA subtile to the next is just: bump `start_address` by the byte offset between the two. The offsets from MMA subtile `(0, 0)` to MMA subtile `(m_tile, k_tile)` are:
+So advancing the descriptor from one MMA subtile to the next is just: bump `start_address` by the byte offset between the two subtiles. The offsets from MMA subtile `(0, 0)` to MMA subtile `(m_subtile, k_subtile)` are:
 
-| m_tile \ k_tile |  0 |   1 |   2 |   3 |     4 |     5 |     6 |     7 |
+| m_subtile \ k_subtile |  0 |   1 |   2 |   3 |     4 |     5 |     6 |     7 |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | **0** |    0 |    32 |    64 |    96 | 16384 | 16416 | 16448 | 16480 |
 | **1** | 8192 |  8224 |  8256 |  8288 | 24576 | 24608 | 24640 | 24672 |
@@ -173,13 +173,13 @@ So advancing the descriptor from one MMA subtile to the next is just: bump `star
 
 Two patterns to notice:
 
-- **Along K** (within a row of the table) the advance is **non-affine**: four small `+32 B` steps within K-atom 0, then a big `+16288 B` jump into K-atom 1, then three more `+32 B` steps.
-- **Along M** (going from row 0 to row 1) the advance is a clean `+8192 B` = 8 M-atoms — because each subtile covers 8 M-atoms in M.
+- **Along K** (within a row of the table) the advance is non-uniform: four small `+32 B` steps within swizzle 128B atom 0, then a big `+16288 B` jump into swizzle 128B atom 1, then three more `+32 B` steps.
+- **Along M** (going from m_subtile 0 to m_subtile 1) the advance is a clean `+8192 B` = 8 swizzle 128B atoms.
 
-Here's the elegant part: **the descriptor advance is implemented as a single `uint64` addition** — `desc += offset`, where `offset` already encodes the non-affine step.
-The non-affine-ness lives in the **CuTe layout** of the SMEM tile, not in any special-case descriptor logic.
+So we just update the `start_address` field in the descriptor by the offset between the two subtiles.
 
-The descriptor's `start_address` field sits at bits 0–13 of the 64-bit word, so adding `offset` (in 16-B units, e.g. `16384/16 = 1024` for the K-atom jump) directly increments `start_address` without spilling into any other field — `2^14 = 16384` 16-B units is 256 KB, far larger than the worst-case offset in this 32 KB tile.
+Similarly, even though 4 MMA subtiles read from the same swizzle 128B atom, they differentiate by their own `start_address` so the Tensor core knows which slice of the 128B atom it should load for each MMA subtile.
+With the `layout_type` information, the Tensor Core should be able to figure out precisely which 16B chunk it should load from SMEM for each MMA subtile.
 
 ### 3.5. How CuTe Implements This
 
