@@ -63,13 +63,15 @@ CHUNK_LW     = 0.7
 
 
 def _atom_fill(m, k):
-    """Two-tone alternation: (m+k) even -> A, odd -> B."""
+    """Two-tone checkerboard: (m+k) even -> A (blue), odd -> B (orange). Both
+    horizontal and vertical neighbours differ, so every adjacent swizzle atom
+    has a different colour."""
     return ATOM_FILL_A if ((m + k) % 2 == 0) else ATOM_FILL_B
 
 ATOM_LABEL_KMAJOR     = ("Swizzle 128B atom (alternating fill)\n"
                           "M=8 × K=64 bf16 (8×128B = 1024 B)")
-ATOM_LABEL_MNMAJOR    = ("Swizzle 128B atom (alternating fill)\n"
-                          "M=64 × K=8 bf16 (128B×8 = 1024 B)")
+ATOM_LABEL_MNMAJOR    = ("Swizzle 64B atom (alternating fill)\n"
+                          "M=32 × K=8 bf16 (64B×8 = 512 B)")
 SUBTILE_LABEL_KMAJOR  = "MMA subtile\nM=64 × K=16 bf16 (64×32B)"
 SUBTILE_LABEL_MNMAJOR = "MMA subtile\nM=64 × K=16 bf16 (128B×16)"
 SMEM_TILE_LABEL       = "SMEM tile\nM=128 × K=128 bf16 (256×128B = 32 KB)"
@@ -675,10 +677,10 @@ def make_kmajor_chunks():
 # Figure 6: mnmajor_tile.png
 # ---------------------------------------------------------------------------
 def make_mnmajor_tile():
-    n_m_atoms = 2
+    n_m_atoms = 4
     n_k_atoms = 16
     atom_w = 1.0
-    atom_h = 4.0
+    atom_h = 2.0          # 4 M-atoms × 2.0 -> total_h = 8 (same overall tile box)
 
     fig, ax = plt.subplots(figsize=(18, 11))
 
@@ -690,13 +692,13 @@ def make_mnmajor_tile():
                              facecolor=_atom_fill(m, k), edgecolor=ATOM_EDGE,
                              linewidth=ATOM_LW)
             ax.add_patch(rect)
-            ax.text(x + atom_w / 2.0, y + atom_h * 0.55,
+            ax.text(x + atom_w / 2.0, y + atom_h * 0.60,
                     f"({m},{k})",
-                    ha="center", va="center", fontsize=11)
+                    ha="center", va="center", fontsize=9)
             storage_idx = m * n_k_atoms + k    # K-first: K varies fastest
-            ax.text(x + atom_w / 2.0, y + atom_h * 0.42,
+            ax.text(x + atom_w / 2.0, y + atom_h * 0.38,
                     f"#{storage_idx}",
-                    ha="center", va="center", fontsize=10, color="#555555")
+                    ha="center", va="center", fontsize=8, color="#555555")
 
     total_w = n_k_atoms * atom_w
     total_h = n_m_atoms * atom_h
@@ -717,7 +719,7 @@ def make_mnmajor_tile():
                 xytext=(0.5 * atom_w, total_h + 0.20),
                 arrowprops=dict(arrowstyle="->", color="#2c7fb8", lw=1.4))
     ax.text(atom_w, total_h + 0.42,
-            "K-atom stride = 1024 B",
+            "K-atom stride = 512 B",
             ha="center", va="bottom", fontsize=14, color="#2c7fb8")
 
     mstride_x = -1.4
@@ -726,7 +728,7 @@ def make_mnmajor_tile():
                 xytext=(mstride_x, total_h - 0.5 * atom_h),
                 arrowprops=dict(arrowstyle="->", color="#c0392b", lw=1.4))
     ax.text(mstride_x - 0.15, total_h - atom_h,
-            "M-atom stride\n= 16384 B",
+            "M-atom stride\n= 8192 B",
             ha="right", va="center", fontsize=14, color="#c0392b")
 
     # Limits/aspect fixed before the legend so the auto-sized legend box can
@@ -745,14 +747,14 @@ def make_mnmajor_tile():
     ax.text(legend_x, total_h - 3.1,
             "Storage order in SMEM\n(K-first — maximizes TMA box):\n"
             "#0=(0,0) → #1=(0,1) → ... → #15=(0,15)\n"
-            "→ #16=(1,0) → ... → #31=(1,15)",
+            "→ #16=(1,0) → ... → #63=(3,15)",
             ha="left", va="top", fontsize=11,
             bbox=dict(boxstyle="round,pad=0.3",
                       facecolor="#f0f0f0", edgecolor="black", linewidth=0.6))
 
     ax.text(total_w / 2.0, total_h + 1.9,
-            "(M=128, K=128) bf16 MN-major Swizzle 128B SMEM tile\n"
-            "2 M-atoms × 16 K-atoms = 32 atoms",
+            "(M=128, K=128) bf16 MN-major Swizzle 64B SMEM tile\n"
+            "4 M-atoms × 16 K-atoms = 64 atoms",
             ha="center", va="bottom", fontsize=18, fontweight="bold")
 
     ax.axis("off")
@@ -764,34 +766,28 @@ def make_mnmajor_tile():
 # Figure 7 / 9: mnmajor_subtiles.png and mnmajor_advance.png
 # ---------------------------------------------------------------------------
 def make_mnmajor_subtiles(advance_overlay=False):
-    n_m_atoms = 2
+    n_m_atoms = 4
     n_k_atoms = 16
     atom_w = 1.0
-    atom_h = 4.0
+    atom_h = 2.0          # 4 M-atoms × 2.0 -> total_h = 8 (same overall tile box)
 
-    subtile_w = 2 * atom_w
-    subtile_h = 1 * atom_h
+    subtile_w = 2 * atom_w     # MMA subtile spans 2 K-atoms
+    subtile_h = 2 * atom_h     # MMA subtile spans 2 M-atoms
 
     fig, ax = plt.subplots(figsize=(19, 11))
 
     byte_offsets = [
-        [0,     2048,  4096,  6144,  8192,  10240, 12288, 14336],
-        [16384, 18432, 20480, 22528, 24576, 26624, 28672, 30720],
+        [0,     1024,  2048,  3072,  4096,  5120,  6144,  7168],
+        [16384, 17408, 18432, 19456, 20480, 21504, 22528, 23552],
     ]
 
     total_w = n_k_atoms * atom_w
     total_h = n_m_atoms * atom_h
 
-    # MN-major chunk grid:
-    #   each swizzle atom (M=64 × K=8 rows) = 8 chunks-along-M × 8 K-rows
-    #   chunks-along-M: M is vertical here; chunk_h_m = atom_h/8 = 0.5
-    #   chunks-along-K: K is horizontal here; one chunk per K-row, so 8 cols
-    n_chunks_m_per_atom = 8
-    n_chunks_k_per_atom = 8
-    chunk_w_k = atom_w / n_chunks_k_per_atom   # 0.125
-    chunk_h_m = atom_h / n_chunks_m_per_atom   # 0.5
-
-    # Layer 1: swizzle atoms with solid alternating fill
+    # Layer 1: swizzle atoms with solid alternating fill. For Major::MN the
+    # swizzle atom is the descriptor's atomic unit (there is no meaningful
+    # 8×16B-chunk sub-grid as in the K-major figure), so the atom is the
+    # smallest box we draw.
     for m in range(n_m_atoms):
         for k in range(n_k_atoms):
             x = k * atom_w
@@ -800,31 +796,6 @@ def make_mnmajor_subtiles(advance_overlay=False):
                              facecolor=_atom_fill(m, k), edgecolor=ATOM_EDGE,
                              linewidth=ATOM_LW, zorder=2)
             ax.add_patch(rect)
-
-    # Layer 2: thin black 8×16B chunk grid inside every atom.
-    # An MN-major atom is M=64 × K=8 rows; an 8×16B chunk is
-    # `16 B along M × 8 rows along K`, so each atom holds 8 chunks-along-M
-    # and 1 chunk-along-K. With M vertical and K horizontal in this figure,
-    # the 8 M-chunks are horizontal stripes separated by 7 horizontal lines
-    # per atom — the atom border already provides the vertical separation.
-    for m_atom in range(n_m_atoms):
-        y0 = (n_m_atoms - 1 - m_atom) * atom_h
-        for j in range(1, n_chunks_m_per_atom):
-            y = y0 + j * chunk_h_m
-            # Thick enough (1.5 pt) to survive the heavy down-scaling the blog
-            # applies — at 0.5 pt these lines aliased away in some subtiles.
-            ax.plot([0, total_w], [y, y], color="#000000",
-                    linewidth=1.5, zorder=3)
-
-    # Layer 3: redraw atom borders crisp on top of chunk grid
-    for m in range(n_m_atoms):
-        for k in range(n_k_atoms):
-            x = k * atom_w
-            y = (n_m_atoms - 1 - m) * atom_h
-            edge_only = Rectangle((x, y), atom_w, atom_h,
-                                  facecolor="none", edgecolor=ATOM_EDGE,
-                                  linewidth=ATOM_LW, zorder=4)
-            ax.add_patch(edge_only)
 
     # Layer 4: red MMA subtile borders on top (no fill).
     for m_tile in range(2):
@@ -848,17 +819,16 @@ def make_mnmajor_subtiles(advance_overlay=False):
                 ha="center", va="bottom", fontsize=13,
                 fontweight="bold", zorder=6)
 
-    # Layer 6: byte-offset labels inside top-left chunk (advance only).
+    # Layer 6: byte-offset labels near each subtile's top-left corner (advance).
     if advance_overlay:
         for m_tile in range(2):
             for k_tile in range(8):
                 x_tl = k_tile * subtile_w
                 y_tl = total_h - m_tile * subtile_h
                 bo = byte_offsets[m_tile][k_tile]
-                # Label sits inside the top portion of the subtile. The
-                # top-left chunk is small (0.125 × 0.5 axes units) so we
-                # offset slightly inward and anchor the label with a short
-                # arrow back to the top-left corner.
+                # Label sits inside the top portion of the subtile; we offset
+                # slightly inward and anchor it with a short arrow back to the
+                # subtile's top-left corner.
                 lbl_x = x_tl + 0.55 * subtile_w
                 lbl_y = y_tl - 0.35
                 tgt_x = x_tl + 0.03
@@ -895,7 +865,7 @@ def make_mnmajor_subtiles(advance_overlay=False):
                         arrowprops=dict(arrowstyle="->", color="#c0392b",
                                         lw=1.5))
         ax.text(total_w / 2.0, y_arrow + 0.25,
-                "K-tile advance (uniform +2048 B)",
+                "K-tile advance (uniform +1024 B)",
                 ha="center", va="bottom", fontsize=14, color="#c0392b",
                 fontweight="bold")
 
@@ -908,10 +878,10 @@ def make_mnmajor_subtiles(advance_overlay=False):
                 ha="right", va="center", fontsize=14, color="#2c7fb8",
                 fontweight="bold")
 
-        title = ("(M=128, K=128) MN-major Swizzle 128B tile — "
+        title = ("(M=128, K=128) MN-major Swizzle 64B tile — "
                  "byte offsets of each tcgen05.mma subtile from subtile (0,0)")
     else:
-        title = ("(M=128, K=128) MN-major Swizzle 128B tile — "
+        title = ("(M=128, K=128) MN-major Swizzle 64B tile — "
                  "16 tcgen05.mma subtiles (2 M-tiles × 8 K-tiles)")
 
     title_y = total_h + (2.25 if advance_overlay else 1.75)
@@ -930,8 +900,6 @@ def make_mnmajor_subtiles(advance_overlay=False):
         {"kind": "smem_tile", "label": SMEM_TILE_LABEL},
         {"kind": "atom",      "label": ATOM_LABEL_MNMAJOR},
         {"kind": "subtile",   "label": SUBTILE_LABEL_MNMAJOR},
-        {"kind": "chunk",     "label": CHUNK_LABEL,
-         "fill": "#FFFFFF"},
     ], width=None, line_h=1.15)
 
     ax.axis("off")
@@ -941,41 +909,40 @@ def make_mnmajor_subtiles(advance_overlay=False):
 
 
 # ---------------------------------------------------------------------------
-# Figure 8: mnmajor_chunks.png
-# One MN-major MMA subtile (red outer border) -> 8 x 2 = 16 pastel chunks.
-# Vertical dim = M (contiguous, 8 chunks), horizontal dim = K (2 chunks).
-# Each chunk is 16 B (along M-contiguous) x 8 (along K).
+# Figure 8: mnmajor_atoms.png
+# One MN-major MMA subtile (red outer border) -> 4 x 2 = 8 swizzle atoms.
+# For Major::MN the descriptor's atomic unit is the SWIZZLE ATOM (NOT an
+# 8x16B chunk): SBO/LBO are the strides *between* swizzle atoms, and the
+# within-atom layout is encoded entirely by layout_type. Vertical dim = M
+# (contiguous, 4 M-atoms), horizontal dim = K (2 K-atoms).
 # ---------------------------------------------------------------------------
-def make_mnmajor_chunks():
-    n_m_chunks = 8        # M — vertical
-    n_k_chunks = 2        # K — horizontal
-    chunk_w = 2.2         # K direction (horizontal)
-    chunk_h = 1.0         # M direction (vertical)
+def make_mnmajor_atoms():
+    n_m_atoms = 2         # M — vertical (2 M-atoms)
+    n_k_atoms = 2         # K — horizontal (2 K-atoms)
+    atom_w = 2.4          # K direction (horizontal)
+    atom_h = 2.6          # M direction (vertical) — atom is M=32 vs K=8, taller
 
     fig, ax = plt.subplots(figsize=(15, 12))
 
-    cmap = plt.get_cmap("tab20")
-    total_w = n_k_chunks * chunk_w        # K spans the width
-    total_h = n_m_chunks * chunk_h        # M spans the height
+    total_w = n_k_atoms * atom_w        # K spans the width
+    total_h = n_m_atoms * atom_h        # M spans the height
 
-    for m in range(n_m_chunks):
-        for k in range(n_k_chunks):
-            x = k * chunk_w
-            y = (n_m_chunks - 1 - m) * chunk_h     # m=0 at top, increasing down
-            idx = k * n_m_chunks + m
-            color = cmap(idx % 20)
-            r, g, b, _ = color
-            light = (r * 0.40 + 0.60, g * 0.40 + 0.60, b * 0.40 + 0.60)
-            rect = Rectangle((x, y), chunk_w, chunk_h,
-                             facecolor=light, edgecolor=CHUNK_EDGE,
-                             linewidth=CHUNK_LW, zorder=2)
+    # Swizzle atoms: two-tone checkerboard fill + thick blue border (adjacent
+    # atoms differ both ways). Each is one Swizzle 64B atom.
+    for m in range(n_m_atoms):
+        for k in range(n_k_atoms):
+            x = k * atom_w
+            y = (n_m_atoms - 1 - m) * atom_h     # m=0 at top, increasing down
+            rect = Rectangle((x, y), atom_w, atom_h,
+                             facecolor=_atom_fill(m, k), edgecolor=ATOM_EDGE,
+                             linewidth=ATOM_LW, zorder=2)
             ax.add_patch(rect)
-            ax.text(x + chunk_w / 2.0, y + chunk_h * 0.62,
-                    f"({m}, {k})",
-                    ha="center", va="center", fontsize=12,
+            ax.text(x + atom_w / 2.0, y + atom_h * 0.62,
+                    f"atom ({m}, {k})",
+                    ha="center", va="center", fontsize=13,
                     fontweight="bold", zorder=3)
-            ax.text(x + chunk_w / 2.0, y + chunk_h * 0.30,
-                    "16B×8",
+            ax.text(x + atom_w / 2.0, y + atom_h * 0.36,
+                    "M=32 × K=8\n(64B×8 = 512 B)",
                     ha="center", va="center", fontsize=11, color="#444444",
                     zorder=3)
 
@@ -985,76 +952,75 @@ def make_mnmajor_chunks():
                       linewidth=SUBTILE_LW, zorder=4)
     ax.add_patch(outer)
 
-    # SBO arrow (K-atom stride) — K is horizontal, so a horizontal arrow on top
-    # spanning one K-chunk.
-    sbo_y = total_h + 0.40
+    # SBO arrow (K-atom stride) — K is horizontal, a horizontal arrow on top
+    # spanning one K-atom (center of atom-col 0 -> center of atom-col 1).
+    sbo_y = total_h + 0.45
     ax.annotate("",
-                xy=(1.5 * chunk_w, sbo_y),
-                xytext=(0.5 * chunk_w, sbo_y),
+                xy=(1.5 * atom_w, sbo_y),
+                xytext=(0.5 * atom_w, sbo_y),
                 arrowprops=dict(arrowstyle="->", color="#c0392b", lw=1.8))
-    ax.text(chunk_w, sbo_y + 0.18,
-            "SBO = 1024 B  (K-atom stride)",
+    ax.text(atom_w, sbo_y + 0.18,
+            "SBO = 512 B  (K-atom stride)",
             ha="center", va="bottom", fontsize=14, color="#c0392b",
             fontweight="bold")
 
-    # M-atom stride (LBO) — M is vertical; unused inside one subtile, drawn as a
-    # dashed grey vertical arrow on the right spanning one M-chunk.
-    lbo_x = total_w + 0.4
+    # LBO arrow (M-atom stride) — M is vertical, a solid blue vertical arrow on
+    # the right spanning one M-atom (both descriptor strides are live).
+    lbo_x = total_w + 0.45
     ax.annotate("",
-                xy=(lbo_x, total_h - 1.5 * chunk_h),
-                xytext=(lbo_x, total_h - 0.5 * chunk_h),
-                arrowprops=dict(arrowstyle="->", color="#888888", lw=1.2,
-                                linestyle="dashed"))
-    ax.text(lbo_x + 0.18, total_h - chunk_h,
-            "LBO = 0\n(MN-atom stride —\nunused, M=64 is\n1 MN-atom)",
-            ha="left", va="center", fontsize=12, color="#666666",
-            style="italic")
+                xy=(lbo_x, total_h - 1.5 * atom_h),
+                xytext=(lbo_x, total_h - 0.5 * atom_h),
+                arrowprops=dict(arrowstyle="->", color="#2c7fb8", lw=1.8))
+    ax.text(lbo_x + 0.20, total_h - atom_h,
+            "LBO = 8192 B\n(M-atom stride)",
+            ha="left", va="center", fontsize=14, color="#2c7fb8",
+            fontweight="bold")
 
-    # M-contiguous arrow — M is vertical now; blue arrow on the left spanning
-    # the full M extent, pointing down (M increases downward).
+    # M-contiguous note on the left — the within-atom 64B×8 layout is set by
+    # the swizzle (layout_type); the descriptor never resolves below the atom.
     mcont_x = -0.55
     ax.annotate("",
                 xy=(mcont_x, 0.1),
                 xytext=(mcont_x, total_h - 0.1),
-                arrowprops=dict(arrowstyle="->", color="#2c7fb8", lw=1.4))
+                arrowprops=dict(arrowstyle="->", color="#666666", lw=1.4))
     ax.text(mcont_x - 0.30, total_h / 2.0,
-            "M = 64 (128 B), contiguous  (+16 B / chunk)",
-            ha="center", va="center", fontsize=14, color="#2c7fb8",
+            "M = 64 (128 B), contiguous\n(within-atom layout = layout_type)",
+            ha="center", va="center", fontsize=13, color="#666666",
             fontweight="bold", rotation=90)
 
-    # K label — K is horizontal now, at the bottom.
-    ax.text(total_w / 2.0, -0.45, "K = 16  (chunk_k = 0, 1)",
+    # K label at the bottom.
+    ax.text(total_w / 2.0, -0.45, "K = 16  (2 K-atoms)",
             ha="center", va="top", fontsize=14)
 
-    ax.text(total_w / 2.0, -1.25,
-            "addr(m, k) = start_address "
-            "+ m·(within-atom M stride) + k·SBO + swizzle_XOR(m, k)",
+    ax.text(total_w / 2.0, -1.30,
+            "atom_addr(mₐ, kₐ) = start_address + mₐ·LBO + kₐ·SBO       "
+            "(within-atom layout from layout_type)",
             ha="center", va="top", fontsize=13,
             bbox=dict(boxstyle="round,pad=0.4",
                       facecolor="#fff9d6", edgecolor="black", linewidth=0.6))
 
-    ax.text(total_w / 2.0, total_h + 1.4,
+    ax.text(total_w / 2.0, total_h + 1.5,
             "First MMA subtile (M=64 × K=16 bf16 = 128B×16)\n"
-            "8×2 = 16 chunks of 16B×8 each",
-            ha="center", va="bottom", fontsize=17, fontweight="bold")
+            "= 4 swizzle atoms (2 M-atoms × 2 K-atoms) — the MN-major "
+            "descriptor's atomic unit",
+            ha="center", va="bottom", fontsize=16, fontweight="bold")
 
     # Limits/aspect fixed before the legend so the auto-sized legend box can
     # measure its label widths in final data coordinates.
-    ax.set_xlim(-3.0, total_w + 12.0)
-    ax.set_ylim(-2.4, total_h + 3.0)
+    ax.set_xlim(-3.2, total_w + 12.0)
+    ax.set_ylim(-2.6, total_h + 3.2)
     ax.set_aspect("equal")
 
     # Legend (auto-sized to its text).
     legend_x = total_w + 5.0
     _draw_legend_box(ax, legend_x, total_h - 0.1, [
         {"kind": "subtile", "label": SUBTILE_LABEL_MNMAJOR},
-        {"kind": "chunk",   "label": CHUNK_LABEL,
-         "fill": "#FDD49E"},
+        {"kind": "atom",    "label": ATOM_LABEL_MNMAJOR},
     ], width=None, line_h=1.15)
 
     ax.axis("off")
 
-    _save(fig, "mnmajor_chunks.png")
+    _save(fig, "mnmajor_atoms.png")
 
 
 # ---------------------------------------------------------------------------
@@ -1290,7 +1256,7 @@ def main():
     make_kmajor_subtiles(advance_overlay=True)
     make_mnmajor_tile()
     make_mnmajor_subtiles(advance_overlay=False)
-    make_mnmajor_chunks()
+    make_mnmajor_atoms()
     make_mnmajor_subtiles(advance_overlay=True)
     make_four_levels()
     print(f"done in {time.time() - t0:.2f}s")
