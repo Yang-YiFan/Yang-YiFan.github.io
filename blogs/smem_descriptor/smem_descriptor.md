@@ -205,13 +205,13 @@ CuTe does this layout conversion to canonical form through a **`uint128` recast*
 
 ```bash
 # ((AtomM, RestM), (AtomK, RestK))
-shape  ((8,  16),   (64, 2))
-stride ((64, 1024), (1, 8192))
-         ^^  ^^^^^   ^  ^^^^
-         |     |     |    +-- Swizzle atom stride along K: 16 atoms × 512 elements = 8192 (= 16384 B)
-         |     |     +-------- within-swizzle-atom K stride: 1 (K is contiguous)
-         |     +--------------- Swizzle atom stride along M:   512 elements    = 1024 B
-         +--------------------- within-swizzle-atom M stride: 64 elements      =  128 B (= one atom-row)
+shape  ((8,  16),  (64, 2))
+stride ((64, 512), (1, 8192))
+         ^^  ^^^    ^   ^^^^
+         |    |     |    +---- Swizzle atom stride along K: 16 atoms × 512 elements = 8192 (= 16384 B)
+         |    |     +--------- within-swizzle-atom K stride: 1 (K is contiguous)
+         |    +-------------- Swizzle atom stride along M: 512 elements = 1024 B
+         +------------------ within-swizzle-atom M stride: 64 elements = 128 B (= one atom-row)
 ```
 
 This is the plain `(M=128, K=128)` SMEM tile layout in bf16 element units.
@@ -272,17 +272,18 @@ So if we `logical_divide` the MMA subtile layout `(MMA_M=64, MMA_K=2)` by `(Chun
 
 ```bash
 # cute.logical_divide((MMA_M, MMA_K), (ChunkM, ChunkK))
-# = ((ChunkM, RestM), (ChunkK, RestK)) : ((8, SBO), (1, LBO))
+# = ((ChunkM, RestM), (ChunkK, RestK)) : ((8, SBO), (·, LBO))
 shape  ((8, 8),  (1, 2))
-stride ((8, 64), (1, 1))
+stride ((8, 64), (0, 1))
 ```
 
 So the stride of `RestM` is `SBO=64=64*16B=1024B` (i.e. stride_01).
 And the stride of `RestK` is `LBO=1=1*16B=16B` (i.e. stride_11).
+(The `ChunkK` sub-mode has size 1, so its stride — `stride_10`, shown as `·` — is a don't-care that CuTe emits as `0`; it is never indexed and does not affect `SBO`/`LBO`.)
 
 One small note is that here our implementation is slightly different from the [CuTe C++ implementation](https://github.com/NVIDIA/cutlass/blob/2599f2975b06a67d5ee25e4a7292afeda1475c9b/include/cute/atom/mma_traits_sm100.hpp#L271) for more clarity.
-CuTe C++ does `cute.logical_divide((MMA_M, MMA_K), (ChunkM, RestK)) = ((ChunkM, RestM), (RestK, ChunkK)) : ((8, SBO), (LBO, 1))`.
-They flipped the `ChunkK` and `RestK` order so `LBO` becomes the stride_10 in the code.
+CuTe C++ does `cute.logical_divide((MMA_M, MMA_K), (ChunkM, RestK)) = ((ChunkM, RestM), (RestK, ChunkK)) : ((8, SBO), (LBO, ·))`.
+They flipped the `ChunkK` and `RestK` order so `LBO` becomes the stride_10 in the code (the trailing `·` is again the size-1 `ChunkK` don't-care stride, `0`).
 Both implementations are functionally correct to extract the `SBO` and `LBO`.
 
 
