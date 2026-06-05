@@ -142,9 +142,10 @@ With `M=64, K=16` K-major, our MMA subtile contains `8 (along M) × 2 (along K) 
 
 ![kmajor chunks](./figures/kmajor_chunks.png)
 
-The SMEM descriptor describes how the 16 8×16B chunks are laid out within one MMA subtile.
-`LBO` describes the stride along K (leading dimension) between adjacent 8x16B chunks and is 16 B in this case.
-`SBO` describes the stride along M (stride dimension) between adjacent 8x16B chunks and is 1024 B in this case.
+The SMEM descriptor describes how the 16 8×16B chunks are laid out within one MMA subtile:
+- **`LBO` describes the stride along K (leading dimension) between adjacent 8x16B chunks and is 16 B in this case.**
+- **`SBO` describes the stride along M (stride dimension) between adjacent 8x16B chunks and is 1024 B in this case.**
+
 Because the `LBO` and `SBO` field in the descriptor are in 16B units, so in this case `LBO = 1` and `SBO = 64`.
 The 16B LBO denotes the stride between the first elements in two adjacent 8x16B chunks along K.
 The 1024B SBO is easy to understand as the stride between two 8x16B atom along M is just the size of a swizzle 128B atom which is 8x128B=1024B.
@@ -196,6 +197,7 @@ You can already see the interpretation of `SBO` and `LBO` in the canonical layou
 If I rewrite it into `((8,m),(8,2k)):((64,SBO),(1,LBO)) = ((ChunkM,m),(ChunkK,2k)):((64,SBO),(1,LBO))`, then you can see `LBO` and `SBO` mean exactly the stride between 8x16B (`(ChunkM=8, ChunkK=8)`) chunks along K and M respectively (the same as what we introduced in [Sec. 3.3](#33-the-descriptor-for-the-first-mma-subtile)).
 
 CuTe does this layout conversion to canonical form through a **`uint128` recast** and a **`logical_divide`**.
+A runnable script for this K-major case is at [`code/sw128_kmajor.py`](./code/sw128_kmajor.py) — it derives every number in this section with CuTe layout algebra and asserts them.
 
 
 #### 3.5.1 Step 1: the original SMEM tile layout
@@ -371,23 +373,20 @@ So the MMA subtile is simply 4 swizzle atoms in a `2 (along M) × 2 (along K)` g
 
 ![mnmajor atoms](./figures/mnmajor_atoms.png)
 
-- `LBO` describes the stride along **M** (the contiguous / leading dimension) between adjacent swizzle atoms, and is **8192 B** here — the M-atom stride. The subtile spans 2 M-atoms, so this stride is live.
-- `SBO` describes the stride along **K** (the strided dimension) between adjacent swizzle atoms, and is **512 B** here — the K-atom stride. The subtile spans 2 K-atoms, which are *adjacent* in SMEM under K-first ordering, so the stride is just one atom = 512 B.
+The SMEM descriptor describes how the 4 swizzle atoms are laid out within one MMA subtile:
+- **`LBO` describes the stride along M (the contiguous / leading dimension) between adjacent swizzle atoms, and is 8192 B here.**
+- **`SBO` describes the stride along K (the strided dimension) between adjacent swizzle atoms, and is 512 B here.**
 
 Because the `LBO`/`SBO` fields are in 16 B units, in this case `LBO = 512` and `SBO = 32`. With `start_address`, `SBO`, and `LBO`, the tensor core can address all 4 swizzle atoms of the `(M=64, K=16)` MMA subtile: `atom_addr(m_atom, k_atom) = start_address + m_atom·LBO + k_atom·SBO`.
 
-The swizzle `layout_type = SWIZZLE_64B` then tells the tensor core the layout *inside* each atom. Because of swizzling, the `M=32 × K=8` atom's `16 B` rows are laid out in a zigzag pattern to avoid bank conflicts (refer to [Sec. 3.2.3 of the previous blog](../mma_swizzle/mma_swizzle.md#323-mn-major-swizzle-64b)). Given an atom's start address and the swizzle `layout_type`, the hardware recovers every byte inside it — the descriptor never needs to name a sub-atom stride.
-
-**Why MN-major has no chunk stride (but K-major does).** A descriptor stride below the swizzle-atom level only appears when an MMA subtile covers a *fraction* of an atom along some dimension. In the K-major case, the subtile was `K=16` while a K-atom is `K=64` — only 1/4 of an atom — so `LBO` had to be a `16 B` *intra*-atom (chunk) step. For MN-major the subtile is a *whole number* of atoms along **both** dimensions (`M=64 = 2` M-atoms, `K=16 = 2` K-atoms), so the descriptor resolves down to whole atoms and nothing finer. That is why the `8×16B` chunk — central to the K-major figures — simply does not appear here. (You can verify this in CuTe: tiling the recast subtile by the swizzle atom yields scalar `SBO`/`LBO`, whereas tiling by an `8×16B` chunk leaves the M-mode hierarchical with no single `LBO`.)
-
-> **The roles of `SBO` and `LBO` swap between Major::K and Major::MN.**
-> In Major::K, `SBO` is the M-atom stride and `LBO` is the 16-B intra-K chunk step.
-> In Major::MN, `LBO` is the M-atom stride and `SBO` is the K-atom stride.
-> The naming "stride" vs "leading" is anchored to the contiguous (= leading) dimension of the operand: `LBO` is the inter-atom stride along the leading direction (K for K-major, M for MN-major), `SBO` along the strided direction.
+The swizzle `layout_type = SWIZZLE_64B` then tells the tensor core the layout *inside* each atom. Because of swizzling, the `M=32 × K=8` atom's `16 B` rows are laid out in a zigzag pattern to avoid bank conflicts (refer to [Sec. 3.2.3 of the previous blog](../mma_swizzle/mma_swizzle.md#323-mn-major-swizzle-64b)). 
+Given an atom's start address and the swizzle `layout_type`, the hardware recovers every byte inside it — the descriptor never needs to name a sub-atom stride (i.e. 8x16B chunk stride in the K-major case).
 
 ### 4.4. The descriptors for the other 15 MMA subtiles — advance via `start_address`
 
-Just as in [Sec. 3.4](#34-the-descriptors-for-the-other-15-mma-subtiles--advance-via-start_address), the other 15 MMA subtiles have **the same shape and the same `(SBO, LBO, layout_type)`** — only `start_address` changes. So advancing the descriptor from one subtile to the next is just bumping `start_address` by the byte offset between them. The offsets from MMA subtile `(0, 0)` to MMA subtile `(m_tile, k_tile)` are:
+Just as in [Sec. 3.4](#34-the-descriptors-for-the-other-15-mma-subtiles--advance-via-start_address), the other 15 MMA subtiles have **the same shape and the same `(SBO, LBO, layout_type)`** — only `start_address` changes. 
+So advancing the descriptor from one subtile to the next is just bumping `start_address` by the byte offset between them. 
+The offsets from MMA subtile `(0, 0)` to MMA subtile `(m_tile, k_tile)` are:
 
 | m_tile \ k_tile |  0 |    1 |    2 |    3 |     4 |     5 |     6 |     7 |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -398,18 +397,16 @@ Just as in [Sec. 3.4](#34-the-descriptors-for-the-other-15-mma-subtiles--advance
 
 Two patterns to notice:
 
-- **Along K** (within a row of the table) the advance is a uniform `+1024 B` = 2 K-atoms = `2 × SBO`. Each K-tile already covers an integer number of whole K-atoms (2), so the advance is *affine* — no "wrap".
-- **Along M** (going from m_tile 0 to m_tile 1) the advance is a uniform `+16384 B` = 2 M-atoms = `2 × LBO`, applied via `start_address`.
+- **Along K** the advance is a uniform `+1024 B` = 2 swizzle atoms = `2 × SBO`. 
+- **Along M** the advance is a uniform `+16384 B` = `2 × LBO`.
 
-This is the big contrast with the K-major case in Sec. 3.4. The K-major advance was *non-affine* along K because each subtile covered only `K=16` = 1/4 of one K-atom, so the K-tile-stride had to "wrap" 4 times before jumping to the next K-atom. Here each subtile covers exactly 2 whole K-atoms, so the K advance is a clean affine `+1024 B`.
-
-Both advances are affine and uniform, but note `M-tile-stride = 16384 = 16 × K-tile-stride`, not `8×`. So — unlike the MN-major Swizzle 128B case where each M-tile is exactly one atom — the 16 subtiles do **not** collapse into one flat contiguous run: after the 8 K-tiles of M-tile 0 sweep the first 2 M-atoms, M-tile 1 jumps `+16384 B` to the next 2 M-atoms. (The within-subtile span across those 2 M-atoms is carried by `LBO` *inside* the descriptor, not by `start_address`.) Either way, advancing the descriptor is still just a `start_address` add of a precomputed offset.
+So we just update the `start_address` field in the descriptor by the offset between the two subtiles.
 
 ### 4.5. How CuTe Implements This
 
-The recipe is the same as [Sec. 3.5](#35-how-cute-implements-this): convert the SMEM tile layout into a **canonical layout form** ([PTX Sec. 9.7.17.3.3 Canonical Layouts](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-canonical-layouts)) via a `uint128` recast and a `logical_divide`, then read `SBO` and `LBO` straight out of fixed stride slots. The one twist for Major::MN: the contiguous dimension is now M, so the canonical reshape tiles by the swizzle **atom** (not the `8×16B` chunk, as in K-major), and `SBO`/`LBO` land in *different* stride slots.
+The recipe is the same as [Sec. 3.5](#35-how-cute-implements-this): convert the SMEM tile layout into a **canonical layout form** ([PTX Sec. 9.7.17.3.3 Canonical Layouts](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-canonical-layouts)) via a `uint128` recast and a `logical_divide`, then read `SBO` and `LBO` straight out of fixed stride slots. 
 
-The MN-major canonical layout template, in **bf16 element** units, is:
+The MN-major canonical layout template, with bf16 element and swizzle 64B atom, is:
 ```bash
 # for bf16 MN-major swizzle 64B
 # T  = 128 / sizeof-elements-in-bits = 128 / 16 = 8   (bf16 per uint128)
@@ -417,79 +414,92 @@ The MN-major canonical layout template, in **bf16 element** units, is:
 ((T,SW,m),(8,k)):((1,T,LBO),(T·SW,SBO))
 = ((8,4,m),(8,k)):((1,8,LBO),(32,SBO))
 ```
-and after the `uint128` recast divides the contiguous-M factor `T` out:
-```bash
-((SW,m),(8,k)):((1,LBO),(SW,SBO))
-= ((4,m),(8,k)):((1,LBO),(4,SBO))
-```
-Compared with the K-major template `((8,m),(8,2k)):((64,SBO),(1,LBO))`, the `SBO` and `LBO` slots are **swapped**: `LBO` is now the leading (M) inter-atom stride in mode 0, `SBO` the strided (K) inter-atom stride in mode 1 — because the leading dimension flipped from K to M. As long as we can convert the SMEM tile layout to the canonical form, we read `SBO` and `LBO` off it and populate the descriptor.
 
-CuTe does this with the same four steps as Sec. 3.5 — a **`zipped_divide`** (MMA partition), a **`uint128` recast**, and a **`logical_divide`**.
+Similarly, the goal is to convert the SMEM tile layout (`(M=128, K=128)`) into the canonical layout form and extract the `SBO` and `LBO` values from the stride.
+CuTe does this with the same four steps as [Sec. 3.5](#35-how-cute-implements-this) — a **`zipped_divide`** (MMA partition), a **`uint128` recast**, and a **`logical_divide`**.
+A runnable script for this MN-major case is at [`code/sw64_mnmajor.py`](./code/sw64_mnmajor.py) — it derives every number in this section with CuTe layout algebra and asserts them.
 
 #### 4.5.1 Step 1: the original SMEM tile layout
 
-`tile_to_shape(Layout_MN_SW64_Atom<bf16>, Shape<_128,_128>, order=(1,0))` produces this hierarchical layout (in **bf16 element** units):
+`tile_to_shape(Layout_MN_SW64_Atom<bf16>, Shape<_128,_128>, order=(1,0))` produces this hierarchical layout (in **bf16 element** units), `order=(1,0)` means stack swizzle atoms (`(AtomM=32, AtomK=8)`) along K first, then along M.
 
 ```bash
 # ((AtomM, RestM), (AtomK, RestK))
 shape  ((32,  4),    (8,  16))
 stride ((1,   4096), (32, 256))
          ^   ^^^^      ^^  ^^^
-         |    |        |    +---- K-atom stride: 1 atom = 256 elements         = 512 B (K-atoms contiguous)
+         |    |        |    +---- swizzle atom stride along K: 1 atom = 256 elements = 512 B
          |    |        +--------- within-atom K stride: 32 elements (one M-row) = 64 B
-         |    +------------------ M-atom stride: 16 K-atoms × 256 = 4096 elem   = 8192 B
-         +----------------------- within-atom M stride: 1 (M is contiguous now)
+         |    +------------------ swizzle atom stride along M: 16 atoms × 256 elements = 4096 elements = 8192 B
+         +----------------------- within-atom M stride: 1 (M is contiguous)
 ```
 
-This is the plain `(M=128, K=128)` MN-major SMEM tile in bf16 element units. We stack the MN-major Swizzle 64B atom (`(AtomM=32, AtomK=8)`) along K first, then along M.
+This is the plain `(M=128, K=128)` MN-major SMEM tile in bf16 element units. 
 
 #### 4.5.2 Step 2: MMA partition
 
-As in Sec. 3.5.2, we first convert the SMEM tile into the MMA-subtile-centric view with a `zipped_divide` by the MMA subtile shape `(MMA_M=64, MMA_K=16)`:
+As in [Sec. 3.5.2](#352-step-2-mma-partition), we first convert the SMEM tile into the MMA-subtile-centric view with a `zipped_divide` by the MMA subtile shape `(MMA_M=64, MMA_K=16)`:
 
 ```bash
-# cute.zipped_divide(((AtomM,RestM),(AtomK,RestK)), (MMA_M, MMA_K))
+# cute.zipped_divide(((AtomM, RestM), (AtomK, RestK)), (MMA_M, MMA_K))
 # = ((MMA_M, MMA_K), Num_MMA_M, Num_MMA_K)
-shape  (((32,2),  16),  (2,    8))
-stride (((1,4096), 32), (8192, 512))
+shape  (((32, 2),   16), (2,    8))
+stride (((1, 4096), 32), (8192, 512))
 ```
 
-The per-subtile mode `((32,2),16)` is the MMA subtile (`M=64, K=16`): along M it is **hierarchical** — `M=64` = `(within-atom 32, 2 M-atoms)` — and along K it is a coalesced flat `16:16` (`K=16` = 2 contiguous K-atoms). The advance mode `(2,8):(8192,512)` already gives the inter-subtile strides: `Num_MMA_M` stride `8192` elem = 16384 B, `Num_MMA_K` stride `512` elem = 1024 B. These are exactly the `start_address` advances from [Sec. 4.4](#44-the-descriptors-for-the-other-15-mma-subtiles--advance-via-start_address).
+The first mode `(MMA_M, MMA_K) = ((32,2),16)` is the MMA subtile (`M=64, K=16`): 
+- along M it is **hierarchical** — `M=64` = `(within-atom 32, 2 swizzle atoms)`.
+- along K it is a coalesced flat `16:32` (`MMA_K=16` = 2 contiguous swizzle atoms along K). 
+
+The advance mode `(Num_MMA_M, Num_MMA_K) = (2,8):(8192,512)` already gives the inter-subtile strides: `Num_MMA_M` stride 8192 elements = 16384 B, `Num_MMA_K` stride 512 elements = 1024 B. These are exactly the `start_address` advances from [Sec. 4.4](#44-the-descriptors-for-the-other-15-mma-subtiles--advance-via-start_address).
 
 #### 4.5.3 Step 3: recast to `uint128_t`
 
-As in Sec. 3.5.3, we recast the whole partitioned layout from `bf16` to `uint128` (8 contiguous bf16 along M → 1 `uint128`) so every stride lands in 16-B descriptor units:
+As in [Sec. 3.5.3](#353-step-3-recast-to-uint128_t), we recast the whole partitioned layout from `bf16` to `uint128` (8 contiguous bf16 along M → 1 `uint128`) so every stride lands in 16B descriptor units:
 
 ```bash
-# cute.recast_layout(128, 16, <partitioned>)
-shape  (((4,2),  16),  (2,    8))
-stride (((1,512), 4),  (1024, 64))
+# cute.recast_layout(128, 16, ((MMA_M, MMA_K), Num_MMA_M, Num_MMA_K))
+shape  (((4, 2),  16),  (2,    8))
+stride (((1, 512), 4),  (1024, 64))
 ```
 
-`sub_u = ((4,2),16):((1,512),4)` is the per-MMA-subtile layout in u128, and `adv = (2,8):(1024,64)` is the inter-subtile advance in u128 — `Num_MMA_M` stride `1024` (= 16384 B), `Num_MMA_K` stride `64` (= 1024 B). Because the layout is in `uint128_t`, these stride values can be used directly as the descriptor's `start_address` offsets.
+`Num_MMA_M` stride `1024` (= 16384 B), `Num_MMA_K` stride `64` (= 1024 B). 
+Because the layout is in `uint128_t`, these stride values can be used directly as the descriptor's `start_address` offsets when we advance the descriptor from one MMA subtile to the next along M or K dimension.
 
 #### 4.5.4 Step 4: logical_divide to get the canonical layout
 
-For Major::MN, `SBO` and `LBO` are the strides between swizzle **atoms** (not `8×16B` chunks — see [Sec. 4.3](#43-the-descriptor-for-the-first-mma-subtile)). So we `logical_divide` the u128 subtile by the swizzle **atom** in u128 units `(AtomM_u128 = 4, AtomK = 8)`:
+After the `uint128` recast, the canonical layout becomes:
+```bash
+# SW = swizzle-bytes / 16 = 64  / 16 = 4    (atom M-width, in uint128)
+((SW,m),(8,k)):((1,LBO),(SW,SBO))
+= ((4,m),(8,k)):((1,LBO),(4,SBO))
+```
+Now the canonical layout is fully data type agnostic, i.e. any data type follows the same canonical layout form after the recast.
+But it's not swizzle type agnostic, i.e. different swizzle types have different canonical layout forms (as indicated by the `SW` variable).
+We need to convert the recasted MMA subtile layout `((4, 2), 16) : ((1, 512), 4)` to the canonical layout template to extract the `SBO` and `LBO` values for the SMEM descriptor.
+
+For MN major SMEM tile, `SBO` and `LBO` are the strides between **swizzle atoms** (not `8×16B` chunks) along K and M dimensions respectively. 
+So we `logical_divide` the u128 MMA subtile by the swizzle atom in u128 units `(AtomM_u128 = 4, AtomK = 8)` (in bf16 units it's `(AtomM=32, AtomK=8)`):
 
 ```bash
-# cute.logical_divide(sub_u, (AtomM_u128=4, AtomK=8))
+# cute.logical_divide((MMA_M, MMA_K), (AtomM_u128=4, AtomK=8))
 # = ((AtomM, RestM), (AtomK, RestK)) : ((1, LBO), (4, SBO))
 shape  ((4, 2),   (8, 2))
 stride ((1, 512), (4, 32))
 ```
 
 So:
-- `LBO` = `RestM` stride = `stride<0,1>` = `512` = `512 × 16 B` = **8192 B** (M-atom stride). `RestM = 2` = the 2 MN-atoms the subtile spans.
-- `SBO` = `RestK` stride = `stride<1,1>` = `32` = `32 × 16 B` = **512 B** (K-atom stride). `RestK = 2` = the 2 K-atoms the subtile spans.
+- `LBO` = `RestM` stride = `stride_01` = `512` = `512 × 16 B` = 8192 B (swizzle atom stride along M). `RestM = 2` = the 2 swizzle atoms in one MMA subtile along M.
+- `SBO` = `RestK` stride = `stride_11` = `32` = `32 × 16 B` = 512 B (swizzle atom stride along K). `RestK = 2` = the 2 swizzle atoms in one MMA subtile along K.
 
-Both are live, non-degenerate strides — exactly the `SBO`/`LBO` from [Sec. 4.3](#43-the-descriptor-for-the-first-mma-subtile). (`AtomM_u128 = 4` is the atom's M-width in u128 = 64 B; `AtomK = 8` is the atom's K-height. The within-atom-K step `stride<1,0> = 4` u128 = 64 B is one atom M-row, and is implicit in `layout_type`.)
-
-As noted in Sec. 3.5.4, our tiler choice here is for clarity; the [CuTe C++ implementation](https://github.com/NVIDIA/cutlass/blob/2599f2975b06a67d5ee25e4a7292afeda1475c9b/include/cute/atom/mma_traits_sm100.hpp#L271) uses a slightly different (but functionally equivalent) split — both extract the same `SBO`/`LBO`.
+Exactly the same as the `SBO` and `LBO` values we calculated in [Sec. 4.3](#43-the-descriptor-for-the-first-mma-subtile).
+This exactly matches the [CuTe C++ implementation](https://github.com/NVIDIA/cutlass/blob/2599f2975b06a67d5ee25e4a7292afeda1475c9b/include/cute/atom/mma_traits_sm100.hpp#L238) to build the MN-major SMEM descriptor.
 
 #### 4.5.5 Step 5: the descriptor advance
 
-Same as Sec. 3.5.5. We now have all the descriptor fields: `layout_type`, `start_address`, `SBO`, and `LBO`. Rather than materialize one descriptor per MMA subtile, CuTe builds one base descriptor for subtile `(0,0)` and produces the other 15 by adding a precomputed offset to `start_address` (`desc + offset` — the `start_address` field is the low 14 bits, so a plain `uint64` add works). The offsets are the `adv` strides from [Step 3](#453-step-3-recast-to-uint128_t), already in 16-B units:
+Same as [Sec. 3.5.5](#355-step-5-the-descriptor-advance). We now have all the descriptor fields: `layout_type`, `start_address`, `SBO`, and `LBO`. 
+Rather than materialize one descriptor per MMA subtile, CuTe builds one base descriptor for subtile `(0,0)` and produces the other 15 by adding an offset to `start_address` (`desc + offset` — the `start_address` field is the low 14 bits, so a plain `uint64` add works). 
+The strides are derived from the `Num_MMA_M` and `Num_MMA_K` strides from [Step 2](#452-step-2-mma-partition), already in 16-B units:
 
 ```bash
 # descriptor tensor (Num_MMA_M, Num_MMA_K)
@@ -497,9 +507,8 @@ shape  (2,    8)
 stride (1024, 64)
 ```
 
-Advancing along M adds `1024 u128 = 16384 B`; advancing along K adds `64 u128 = 1024 B`. Both are flat affine strides (no hierarchical mode), which is exactly why the MN-major advance is uniform — contrast the K-major K-mode, whose hierarchical stride produced the non-affine `+32/+16288` pattern in Sec. 3.5.3. In practice CuTe does this through the same [DescriptorIterator](https://github.com/NVIDIA/cutlass/blob/2599f2975b06a67d5ee25e4a7292afeda1475c9b/include/cute/atom/mma_traits_sm100.hpp#L314) `operator+`.
-
-A runnable script for this MN-major case is at [`code/sw64_mnmajor.py`](./code/sw64_mnmajor.py) — it derives every number in this section with CuTe layout algebra and asserts them.
+Advancing along M adds `1024 u128 = 16384 B` to `start_address`; advancing along K adds `64 u128 = 1024 B` to `start_address`. 
+CuTe uses the same [DescriptorIterator](https://github.com/NVIDIA/cutlass/blob/2599f2975b06a67d5ee25e4a7292afeda1475c9b/include/cute/atom/mma_traits_sm100.hpp#L314) and `operator+` as the K-major case to advance the descriptor.
 
 ## 5. Summary
 

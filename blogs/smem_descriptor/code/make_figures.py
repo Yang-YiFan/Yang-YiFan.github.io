@@ -319,7 +319,7 @@ def make_kmajor_tile():
                 xytext=(mstride_x, total_h - 0.5 * atom_h),
                 arrowprops=dict(arrowstyle="->", color="#c0392b", lw=1.4))
     ax.text(mstride_x - 0.20, total_h - atom_h,
-            "M-atom stride\n= 1024 B",
+            "swizzle atom stride\nalong M = 1024 B",
             ha="right", va="center", fontsize=14, color="#c0392b")
 
     # K-atom stride arrow — lifted clear of the tile's top edge.
@@ -328,7 +328,7 @@ def make_kmajor_tile():
                 xytext=(atom_w / 2.0,      total_h + 0.55),
                 arrowprops=dict(arrowstyle="->", color="#2c7fb8", lw=1.4))
     ax.text(atom_w, total_h + 0.70,
-            "K-atom stride = 16384 B",
+            "swizzle atom stride along K = 16384 B",
             ha="center", va="bottom", fontsize=14, color="#2c7fb8")
 
     # Limits/aspect are fixed before the legend so the auto-sized legend box
@@ -623,7 +623,7 @@ def make_kmajor_chunks():
                 xytext=(arrow_x, total_h - 0.5 * chunk_h),
                 arrowprops=dict(arrowstyle="->", color="#c0392b", lw=1.8))
     ax.text(arrow_x + 0.15, total_h - chunk_h,
-            "SBO = 1024 B\n(M-atom stride)",
+            "SBO = 1024 B",
             ha="left", va="center", fontsize=14, color="#c0392b",
             fontweight="bold")
 
@@ -714,21 +714,22 @@ def make_mnmajor_tile():
     ax.text(-5.25, total_h / 2.0, "M  (M=0 → M=127, contiguous)",
             ha="center", va="center", fontsize=14, rotation=90)
 
+    kstride_dx = 3.0            # nudge the K-stride arrow + label to the right
     ax.annotate("",
-                xy=(1.5 * atom_w, total_h + 0.20),
-                xytext=(0.5 * atom_w, total_h + 0.20),
+                xy=(1.5 * atom_w + kstride_dx, total_h + 0.20),
+                xytext=(0.5 * atom_w + kstride_dx, total_h + 0.20),
                 arrowprops=dict(arrowstyle="->", color="#2c7fb8", lw=1.4))
-    ax.text(atom_w, total_h + 0.42,
-            "K-atom stride = 512 B",
+    ax.text(atom_w + kstride_dx, total_h + 0.42,
+            "swizzle atom stride along K = 512 B",
             ha="center", va="bottom", fontsize=14, color="#2c7fb8")
 
-    mstride_x = -1.4
+    mstride_x = -0.4           # nudged right (was -1.4) per request
     ax.annotate("",
                 xy=(mstride_x, total_h - 1.5 * atom_h),
                 xytext=(mstride_x, total_h - 0.5 * atom_h),
                 arrowprops=dict(arrowstyle="->", color="#c0392b", lw=1.4))
     ax.text(mstride_x - 0.15, total_h - atom_h,
-            "M-atom stride\n= 8192 B",
+            "swizzle atom stride\nalong M = 8192 B",
             ha="right", va="center", fontsize=14, color="#c0392b")
 
     # Limits/aspect fixed before the legend so the auto-sized legend box can
@@ -857,15 +858,24 @@ def make_mnmajor_subtiles(advance_overlay=False):
             ha="center", va="center", fontsize=14, rotation=90)
 
     if advance_overlay:
-        y_arrow = total_h + 1.45
+        # Per-subtile K-tile advance arrows (same style as kmajor_advance):
+        # each red arrow sits right above subtile k, spanning its width, and is
+        # labelled with the +offset (bytes) to step to subtile k+1.
+        y_arrow = total_h + 2.7
+        kvals = [1024] * 7   # uniform K-tile advance (subtile k -> k+1), bytes
+        inset = 0.15 * subtile_w
         for k in range(7):
-            x_a = (k + 0.5) * subtile_w
-            x_b = (k + 1.5) * subtile_w
-            ax.annotate("", xy=(x_b, y_arrow), xytext=(x_a, y_arrow),
+            x_left  = k * subtile_w
+            x_right = x_left + subtile_w
+            ax.annotate("", xy=(x_right - inset, y_arrow),
+                        xytext=(x_left + inset, y_arrow),
                         arrowprops=dict(arrowstyle="->", color="#c0392b",
                                         lw=1.5))
-        ax.text(total_w / 2.0, y_arrow + 0.25,
-                "K-tile advance (uniform +1024 B)",
+            ax.text((x_left + x_right) / 2.0, y_arrow - 0.38, f"+{kvals[k]}",
+                    ha="center", va="top", fontsize=13, color="#c0392b",
+                    fontweight="bold")
+        ax.text(total_w / 2.0, y_arrow + 0.28,
+                "K-tile advance (uniform), bytes:",
                 ha="center", va="bottom", fontsize=14, color="#c0392b",
                 fontweight="bold")
 
@@ -884,14 +894,14 @@ def make_mnmajor_subtiles(advance_overlay=False):
         title = ("(M=128, K=128) MN-major Swizzle 64B tile — "
                  "16 tcgen05.mma subtiles (2 M-tiles × 8 K-tiles)")
 
-    title_y = total_h + (2.25 if advance_overlay else 1.75)
+    title_y = total_h + (3.8 if advance_overlay else 1.75)
     ax.text(total_w / 2.0, title_y, title,
             ha="center", va="bottom", fontsize=18, fontweight="bold")
 
     # Limits/aspect fixed before the legend so the auto-sized legend box can
     # measure its label widths in final data coordinates.
     ax.set_xlim(-3.2, total_w + 9.5)
-    ax.set_ylim(-0.5, total_h + (2.9 if advance_overlay else 2.6))
+    ax.set_ylim(-0.5, total_h + (4.6 if advance_overlay else 2.6))
     ax.set_aspect("equal")
 
     # Sidebar legend (auto-sized to its text).
@@ -960,7 +970,7 @@ def make_mnmajor_atoms():
                 xytext=(0.5 * atom_w, sbo_y),
                 arrowprops=dict(arrowstyle="->", color="#c0392b", lw=1.8))
     ax.text(atom_w, sbo_y + 0.18,
-            "SBO = 512 B  (K-atom stride)",
+            "SBO = 512 B",
             ha="center", va="bottom", fontsize=14, color="#c0392b",
             fontweight="bold")
 
@@ -972,7 +982,7 @@ def make_mnmajor_atoms():
                 xytext=(lbo_x, total_h - 0.5 * atom_h),
                 arrowprops=dict(arrowstyle="->", color="#2c7fb8", lw=1.8))
     ax.text(lbo_x + 0.20, total_h - atom_h,
-            "LBO = 8192 B\n(M-atom stride)",
+            "LBO = 8192 B",
             ha="left", va="center", fontsize=14, color="#2c7fb8",
             fontweight="bold")
 
@@ -989,7 +999,7 @@ def make_mnmajor_atoms():
             fontweight="bold", rotation=90)
 
     # K label at the bottom.
-    ax.text(total_w / 2.0, -0.45, "K = 16  (2 K-atoms)",
+    ax.text(total_w / 2.0, -0.45, "K = 16",
             ha="center", va="top", fontsize=14)
 
     ax.text(total_w / 2.0, -1.30,
@@ -1001,8 +1011,8 @@ def make_mnmajor_atoms():
 
     ax.text(total_w / 2.0, total_h + 1.5,
             "First MMA subtile (M=64 × K=16 bf16 = 128B×16)\n"
-            "= 4 swizzle atoms (2 M-atoms × 2 K-atoms) — the MN-major "
-            "descriptor's atomic unit",
+            "= 4 swizzle atoms\n"
+            "the MN-major descriptor's atomic unit",
             ha="center", va="bottom", fontsize=16, fontweight="bold")
 
     # Limits/aspect fixed before the legend so the auto-sized legend box can
