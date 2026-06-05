@@ -541,37 +541,14 @@ So this instruction will demand the input operand to be `(M=128, K=32B)`.
 
 ## 6. Summary
 
-The Blackwell SMEM matrix descriptor packs into 64 bits everything the tensor core needs to fetch one `tcgen05.mma` operand from SMEM.
+In this blog I covered the Blackwell SMEM matrix descriptor:
 
-Throughout this blog we worked with four nested levels of granularity, and each played a specific role in the descriptor story:
+- The SMEM descriptor is a 64-bit value that tells the tensor core where an instruction operand lives in SMEM and how to walk it; the fields that matter are `layout_type`, `start_address`, `SBO`, and `LBO`.
+- A SMEM tile decomposes into four nested levels — SMEM tile → swizzle atom → MMA subtile → `8×16B` chunk — and one descriptor describes exactly one MMA subtile (the operand of one `tcgen05.mma` or `tcgen05.cp`).
+- For K-major SMEM tile, `LBO` denotes the strides between `8x16B` chunks along K dimension, and `SBO` denotes the strides between `8x16B` chunks along M dimension.
+- For MN-major SMEM tile, `LBO` denotes the strides between `swizzle atoms` along M dimension, and `SBO` denotes the strides between `swizzle atoms` along K dimension.
+- When advancing to a new MMA subtile, `start_address` is the **only** field that changes — updating the descriptor is just a `uint64` add of a precomputed offset (`desc + offset`).
+- CuTe derives `SBO`/`LBO` and the advance offsets by recasting the SMEM tile to `uint128_t` and reading specific `stride<i,j>` slots out of a canonical `logical_divide` reshape. It's all abstracted away from the user.
+- The descriptor is agnostic to the instruction shape — it only encodes *how* chunks/atoms stack along M and K, never *where to stop*. The `(M, K)` boundary comes entirely from the instruction's operand shape.
 
-| Level | What it is | Where it shows up in the descriptor |
-|---|---|---|
-| **SMEM tile** (e.g. M=128 × K=128) | The high-level region one CTA stages from GMEM. | Not directly — but its CuTe layout is the input to `make_umma_desc`. |
-| **Swizzle atom** (1024 B K-major, 512 B MN) | The TMA-friendly building block; the SMEM tile is a stack of swizzle atoms. | Determines `layout_type`; its size determines `SBO` and `LBO` numerically. |
-| **MMA subtile** (M=64 × K=16) | What one `tcgen05.mma` instruction consumes. | One descriptor describes one MMA subtile. |
-| **8×16B chunk** (16 B per row × 8 rows) | The primitive layout unit the MMA hardware addresses. | `SBO`/`LBO` are the inter-unit strides inside one subtile — between `8×16B` chunks for K-major, between swizzle atoms for MN-major; `start_address` anchors them; `layout_type` encodes the swizzle XOR within an atom. |
-
-The four descriptor fields, mapped to which level they speak about:
-
-- **`layout_type`** — picks the swizzle mode, which implicitly nails down the relative positions of all 8×16B chunks inside one swizzle atom. **Constant** for the whole kernel.
-- **`SBO`** and **`LBO`** — the two strides *inside* one MMA subtile (between `8×16B` chunks for K-major, between swizzle atoms for MN-major). CuTe reads them off the SMEM tensor by recasting to `uint128_t` and pulling specific `stride<i,j>` lookups out of a canonical hierarchical reshape. **Constant** across all `tcgen05.mma` invocations of the same shape.
-- **`start_address`** — anchors *which* MMA subtile we're talking about. **This is the only field that changes** between `tcgen05.mma` invocations, and the change is a straight `uint64` add of a precomputed offset.
-
-The role of `SBO` vs `LBO` flips between Major::K and Major::MN:
-
-|              | Major::K, B128                       | Major::MN, B64              |
-|--------------|---------------------------------------|-----------------------------|
-| atom ordering | stack along M first (maximize TMA box) | stack along K first (maximize TMA box) |
-| descriptor granularity | between `8×16B` chunks | between swizzle atoms |
-| **SBO**      | M-atom stride (= 1024 B in our tile)  | K-atom stride (= 512 B)     |
-| **LBO**      | 16 B intra-K step (= 1 u128)          | M-atom stride (= 8192 B)    |
-| Used **inside** one MMA subtile? | both — SBO steps 8 M-atoms, LBO steps 2 K-halves | both — SBO steps 2 K-atoms, LBO steps 2 M-atoms |
-| Advance **between** MMA subtiles? | via `start_address` (K-tile non-affine, M-tile +8192 B) | via `start_address` (K-tile +1024 B, M-tile +16384 B) |
-
-For our `(M=128, K=128)` bf16 SMEM tile with the M=64 `tcgen05.mma` (K-major Swizzle 128B, MN-major Swizzle 64B):
-
-- **K-major**: the 16 MMA subtiles fan out in 2 (M-tiles) × 8 (K-tiles). K-tile advance is non-affine (`+32 +32 +32 +32 +16288 +32 +32 +32` bytes); M-tile advance is `+8192` bytes.
-- **MN-major**: both advances are affine and uniform — K-tile `+1024` bytes, M-tile `+16384` bytes. Because each MMA subtile spans 2 M-atoms (so the M-tile stride is 16× the K-tile stride, not 8×), the 16 subtiles do not collapse into a single contiguous run, but every advance is still a constant `start_address` add.
-
-The non-affine K-major advance is not a special case in CuTe — it falls out of the hierarchical CuTe layout of the K-tile mode of the `uint128`-recasted tensor. The descriptor iterator's `operator+` is just `desc + uint64_t(offset)`. All the cleverness is in picking the canonical layout shape so the right strides pop out of `logical_divide` — once that's done, the descriptor's "advance" is the dumbest possible operation.
+I hope you understand how the SMEM descriptor works now.

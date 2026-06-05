@@ -14,7 +14,8 @@ You can access my curriculum vitae [here](misc/CV_Yifan_Yang.pdf).
 
 I plan to write blogs during my process of learning CUDA/Cutlass/CuTe/Triton programming. Stay tuned for more!
 
-- ### [[Latest] 4 Ways to Do CuTe Copy](./blogs/cute_copy/cute_copy.md)
+- ### [[New] Blackwell MMA SMEM Descriptor](./blogs/smem_descriptor/smem_descriptor.md)
+- ### [4 Ways to Do CuTe Copy](./blogs/cute_copy/cute_copy.md)
 - ### [GPU Memory Consistency Model](./blogs/memory_model/memory_model.md)
 - ### [Tensor Core MMA Swizzle Layout](./blogs/mma_swizzle/mma_swizzle.md)
 - ### [Using Programmatic Dependent Launch (PDL) to Reduce End-to-End Latency](./blogs/pdl/pdl.md)
