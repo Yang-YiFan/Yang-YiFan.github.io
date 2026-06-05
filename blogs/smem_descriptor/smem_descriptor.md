@@ -510,7 +510,36 @@ stride (1024, 64)
 Advancing along M adds `1024 u128 = 16384 B` to `start_address`; advancing along K adds `64 u128 = 1024 B` to `start_address`. 
 CuTe uses the same [DescriptorIterator](https://github.com/NVIDIA/cutlass/blob/2599f2975b06a67d5ee25e4a7292afeda1475c9b/include/cute/atom/mma_traits_sm100.hpp#L314) and `operator+` as the K-major case to advance the descriptor.
 
-## 5. Summary
+## 5. Generalizing to other instruction shapes
+
+At this point, you can probably already tell the SMEM descriptor really is a way to express the SMEM layout of an "arbitrarily" sized SMEM tile (`(M, K)`) using `start_address`, `LBO` and `SBO` fields (along with `layout_type`).
+- For K-major SMEM tile, `LBO` denotes how the `8x16B` chunks are stacking along K dimension, and `SBO` denotes how the `8x16B` chunks are stacking along M dimension.
+- For MN-major SMEM tile, `LBO` denotes how the swizzle atoms are stacking along M dimension, and `SBO` denotes how the swizzle atoms are stacking along K dimension.
+
+It doesn't tell you where to stop the stacking along M and K.
+There is no boundary encoded in the descriptor.
+**The boundary is solely determined by the shape of the operand each instruction demands.**
+
+- If you have a M=64 bf16 `tcgen05.mma` instruction, your A operand shape is `(M=64, K=16)`.
+For a K-major bf16 SMEM tile, this `(M=64, K=16)` boundary will include 8 (along M) x 2 (along K) = 16 `8x16B` chunks.
+- If you have a M=128 bf16 `tcgen05.mma` instruction, your A operand shape is `(M=128, K=16)`.
+For a K-major bf16 SMEM tile, this `(M=128, K=16)` boundary will include 16 (along M) x 2 (along K) = 32 `8x16B` chunks.
+- If you have a fp8 [`tcgen05.cp.32x128b.warpx4`](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-instructions-tcgen05-cp) instruction, your source operand shape is `(M=32, K=16B=16)`. For a K-major fp8 SMEM tile, this `(M=32, K=16)` boundary will include 4 (along M) x 1 (along K) = 4 `8x16B` chunks.
+- If you have a fp8 [`tcgen05.cp.128x256b`](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-instructions-tcgen05-cp) instruction, your source operand shape is `(M=128, K=32B=32)`. For a K-major fp8 SMEM tile, this `(M=128, K=32)` boundary will include 16 (along M) x 2 (along K) = 32 `8x16B` chunks.
+
+Through the above examples you can see that the number of `8x16B` chunks being read by the hardware is solely determined by the instruction's operand shape.
+The operand encodes a `(M, K)` boundary, and the SMEM descriptor encodes how the `8x16B` chunks are stacked within this boundary.
+Obviously the same example and argument can be applied to MN-major SMEM tile, you just need to replace the `8x16B` chunks with swizzle atoms.
+
+You can see the beauty of the SMEM descriptor is that it is agnostic to the instruction shape.
+It is a universal way to express the SMEM layout of an arbitrarily sized SMEM tile using `start_address`, `LBO` and `SBO` fields (along with `layout_type`).
+
+One final note is currently `tcgen05.mma` and `tcgen05.cp` takes SMEM descriptor as input.
+It's easy to decode the M and K shape required for each `tcgen05.mma` instruction.
+For `tcgen05.cp`, take `tcgen05.cp.128x256b` as an example, the first 128 means `M=128`, the second 256 means `K=256b=32B`.
+So this instruction will demand the input operand to be `(M=128, K=32B)`.
+
+## 6. Summary
 
 The Blackwell SMEM matrix descriptor packs into 64 bits everything the tensor core needs to fetch one `tcgen05.mma` operand from SMEM.
 
