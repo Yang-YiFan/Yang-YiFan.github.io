@@ -451,6 +451,8 @@ You can refer to [Hopper mma matrix descriptor](https://docs.nvidia.com/cuda/par
 Soon I'll cover the blackwell part in more details in a separate blog using a [low-latency optimized blackwell GEMM kernel](https://github.com/flashinfer-ai/flashinfer/blob/main/include/flashinfer/gemm/tgv_gemm.cuh) I wrote and open sourced in FlashInfer.
 Stay tuned :)
 
+**[UPDATE]** I wrote a blog about [Blackwell MMA SMEM Descriptor](../smem_descriptor/smem_descriptor.md) that covers how to build the SMEM descriptor for Blackwell MMA.
+
 ## 9. Compatibility with TMA
 
 Hopper introduces [Tensor Memory Accelerator (TMA)](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/) to facilitate tensor data movement between GMEM and SMEM.
@@ -557,6 +559,7 @@ Hence we have 16 TMA boxes for the `64x64B` tile and generates 32B GMEM read req
 The blue box on the top right corner shows the swizzle atom needed by a single `tcgen05.mma` instruction.
 MMA 0 needs atom 0, 2, 4, 6... and MMA 1 needs atom 1, 3, 5, 7...
 The layout of MMA 0's input operand (atom 0, 2, 4, 6... (`64x32B` subtile)) can be described as a [Blackwell mma matrix descriptor](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-matrix-descriptors) and CuTe can build it for you automatically.
+In my [Blackwell MMA SMEM Descriptor blog](../smem_descriptor/smem_descriptor.md), we cover how CuTe builds the SMEM descriptor for Blackwell MMA in more details.
 
 If we stack the swizzle atoms in column-major layout (i.e. atom 0, 2, 4, 6... are contiguous in SMEM), we can have a much larger TMA box.
 The bottom of the figure illustrates the column-major stacking.

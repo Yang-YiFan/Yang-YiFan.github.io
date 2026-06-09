@@ -85,6 +85,8 @@ In the figures throughout the rest of the blog, the conventions are:
 - **MMA subtile**: thick red border (no fill) overlaid on top. Always labeled with its shape.
 - **8×16B chunk**: thin black border, varied pastel fills.
 
+It is worth noting that the four tiles we show above are the *logical view* of the tile, meaning the tile is indexed by `(m, k)` in the logical view.
+Consecutive `(m, k)` elements in the tile may not be consecutive in SMEM, because of the swizzle layout.
 
 ## 3. Worked Example — `(M=128, K=128)` bf16 K-major, Swizzle 128B
 
@@ -93,7 +95,7 @@ In the figures throughout the rest of the blog, the conventions are:
 We start with a 32 KB **SMEM tile** of shape `(M=128, K=128)` in bf16, K-major, with K-major Swizzle 128B layout.
 This is the high-level SMEM region one TMA stage copies from GMEM to SMEM in warp specialized pipeline.
 
-For TMA copy, the SMEM tile is built out of **swizzle 128B atoms** stacked together (this is the TMA-friendly view from the [previous blog](../mma_swizzle/mma_swizzle.md#7-swizzle-atom-layout)).
+For TMA copy, the SMEM tile is built out of `swizzle 128B atoms` stacked together (this is the TMA-friendly view from the [previous blog](../mma_swizzle/mma_swizzle.md#7-swizzle-atom-layout)).
 The K-major Swizzle 128B atom is `M=8, K=128B` (or `M=8 × K=64` bf16) — an `8×128B = 1024 B` tile.
 Our `(M=128, K=128)` SMEM tile therefore decomposes into **16 M-atoms × 2 K-atoms = 32 swizzle atoms**.
 And we stack the swizzle atom along M first, then along K (i.e. stacking layout is `(16, 2) : (1, 16)`).
@@ -105,6 +107,10 @@ So this tile will be broken down into 2 TMA boxes (`(M=128, K=64)` formed by sta
 
 Atom `(m, k)` sits at SMEM byte offset `m * 1024 + k * 16384` from the base of the tile.
 So the swizzle atom starting address stride along M is 1024 B and along K is 16384 B.
+
+Again it's worth noting that this is the *logical view* of the SMEM tile, meaning the tile is indexed by `(m, k)` in the logical view.
+According to the [previous blog](../mma_swizzle/mma_swizzle.md#314-k-major-swizzle-128b), consecutive `(m, k)` elements in the logical view within a swizzle atom may not be consecutive in SMEM.
+Their physical SMEM addresses are determined by the `(m, k)` coordinate as well as the swizzle layout.
 
 ### 3.2. The MMA subtile
 
@@ -208,7 +214,7 @@ A runnable script for this K-major case is at [`code/sw128_kmajor.py`](./code/sw
 # ((AtomM, RestM), (AtomK, RestK))
 shape  ((8,  16),  (64, 2))
 stride ((64, 512), (1, 8192))
-         ^^  ^^^    ^   ^^^^
+         ^^  ^^^    ^  ^^^^
          |    |     |    +---- Swizzle atom stride along K: 16 atoms × 512 elements = 8192 (= 16384 B)
          |    |     +--------- within-swizzle-atom K stride: 1 (K is contiguous)
          |    +-------------- Swizzle atom stride along M: 512 elements = 1024 B
@@ -333,7 +339,7 @@ Therefore, our `(M=128, K=128)` SMEM tile therefore decomposes into 4 x 16 = 64 
 This is the opposite of the K-major case ([Sec. 3.1](#31-the-smem-tile-and-the-swizzle-atom)), where we stacked along M first. 
 The reason is the same in both cases: stacking atoms contiguously along the *non-swizzled* dimension lets a single TMA box span that whole dimension in one transfer (see [Sec. 9.3 of the previous blog](../mma_swizzle/mma_swizzle.md#93-putting-it-all-together) for why). 
 Stacking is done through `tile_to_shape` in CuTe which basically stacks the atoms along M and K dimensions with a specified stacking order.
-Here the swizzled dimension is M and one atom is only `M=32` wide, so a single TMA box can't cross from one M-atom to the next — the tile breaks into **4 TMA boxes** (each `(M=32, K=128)`, atom stacking 16 times along K), and we issue 4 TMA loads for this SMEM tile.
+Here the swizzled dimension is M and one atom is only `M=32` wide, so a single TMA box can't cross from one M-atom to the next — the tile breaks into 4 TMA boxes (each `(M=32, K=128)`, atom stacking 16 times along K), and we issue 4 TMA loads for this SMEM tile.
 
 ![mnmajor tile](./figures/mnmajor_tile.png)
 
@@ -425,13 +431,13 @@ A runnable script for this MN-major case is at [`code/sw64_mnmajor.py`](./code/s
 
 ```bash
 # ((AtomM, RestM), (AtomK, RestK))
-shape  ((32,  4),    (8,  16))
-stride ((1,   4096), (32, 256))
-         ^   ^^^^      ^^  ^^^
-         |    |        |    +---- swizzle atom stride along K: 1 atom = 256 elements = 512 B
-         |    |        +--------- within-atom K stride: 32 elements (one M-row) = 64 B
-         |    +------------------ swizzle atom stride along M: 16 atoms × 256 elements = 4096 elements = 8192 B
-         +----------------------- within-atom M stride: 1 (M is contiguous)
+shape  ((32, 4),    (8,  16))
+stride ((1,  4096), (32, 256))
+         ^   ^^^^    ^^  ^^^
+         |    |      |    +---- swizzle atom stride along K: 1 atom = 256 elements = 512 B
+         |    |      +--------- within-atom K stride: 32 elements (one M-row) = 64 B
+         |    +---------------- swizzle atom stride along M: 16 atoms × 256 elements = 4096 elements = 8192 B
+         +--------------------- within-atom M stride: 1 (M is contiguous)
 ```
 
 This is the plain `(M=128, K=128)` MN-major SMEM tile in bf16 element units. 
@@ -448,7 +454,7 @@ stride (((1, 4096), 32), (8192, 512))
 ```
 
 The first mode `(MMA_M, MMA_K) = ((32,2),16)` is the MMA subtile (`M=64, K=16`): 
-- along M it is **hierarchical** — `M=64` = `(within-atom 32, 2 swizzle atoms)`.
+- along M it is *hierarchical* — `M=64` = `(within-atom 32, 2 swizzle atoms)`.
 - along K it is a coalesced flat `16:32` (`MMA_K=16` = 2 contiguous swizzle atoms along K). 
 
 The advance mode `(Num_MMA_M, Num_MMA_K) = (2,8):(8192,512)` already gives the inter-subtile strides: `Num_MMA_M` stride 8192 elements = 16384 B, `Num_MMA_K` stride 512 elements = 1024 B. These are exactly the `start_address` advances from [Sec. 4.4](#44-the-descriptors-for-the-other-15-mma-subtiles--advance-via-start_address).
@@ -478,7 +484,7 @@ Now the canonical layout is fully data type agnostic, i.e. any data type follows
 But it's not swizzle type agnostic, i.e. different swizzle types have different canonical layout forms (as indicated by the `SW` variable).
 We need to convert the recasted MMA subtile layout `((4, 2), 16) : ((1, 512), 4)` to the canonical layout template to extract the `SBO` and `LBO` values for the SMEM descriptor.
 
-For MN major SMEM tile, `SBO` and `LBO` are the strides between **swizzle atoms** (not `8×16B` chunks) along K and M dimensions respectively. 
+For MN major SMEM tile, `SBO` and `LBO` are the strides between *swizzle atoms* (not `8×16B` chunks) along K and M dimensions respectively. 
 So we `logical_divide` the u128 MMA subtile by the swizzle atom in u128 units `(AtomM_u128 = 4, AtomK = 8)` (in bf16 units it's `(AtomM=32, AtomK=8)`):
 
 ```bash
@@ -547,7 +553,7 @@ In this blog I covered the Blackwell SMEM matrix descriptor:
 - A SMEM tile decomposes into four nested levels — SMEM tile → swizzle atom → MMA subtile → `8×16B` chunk — and one descriptor describes exactly one MMA subtile (the operand of one `tcgen05.mma` or `tcgen05.cp`).
 - For K-major SMEM tile, `LBO` denotes the strides between `8x16B` chunks along K dimension, and `SBO` denotes the strides between `8x16B` chunks along M dimension.
 - For MN-major SMEM tile, `LBO` denotes the strides between `swizzle atoms` along M dimension, and `SBO` denotes the strides between `swizzle atoms` along K dimension.
-- When advancing to a new MMA subtile, `start_address` is the **only** field that changes — updating the descriptor is just a `uint64` add of a precomputed offset (`desc + offset`).
+- When advancing to a new MMA subtile, `start_address` is the only field that changes — updating the descriptor is just a `uint64` add of a precomputed offset (`desc + offset`).
 - CuTe derives `SBO`/`LBO` and the advance offsets by recasting the SMEM tile to `uint128_t` and reading specific `stride<i,j>` slots out of a canonical `logical_divide` reshape. It's all abstracted away from the user.
 - The descriptor is agnostic to the instruction shape — it only encodes *how* chunks/atoms stack along M and K, never *where to stop*. The `(M, K)` boundary comes entirely from the instruction's operand shape.
 
