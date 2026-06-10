@@ -45,7 +45,13 @@
         right: 0;
         z-index: 1000;
         height: 56px;
-        background: var(--clr-bg);
+        /* Apple-style frosted glass: translucent + blurred backdrop. Uses
+           the theme's own --L-bg lightness so it adapts to light/dark.
+           Looks solid at the top (page bg behind it) and reveals the
+           translucency once content scrolls underneath. */
+        background: hsla(0, 0%, var(--L-bg, 100%), 0.72);
+        -webkit-backdrop-filter: saturate(180%) blur(20px);
+        backdrop-filter: saturate(180%) blur(20px);
         border-bottom: 1px solid var(--clr-splitter-blockquote-and-section);
         display: flex;
         justify-content: center;
