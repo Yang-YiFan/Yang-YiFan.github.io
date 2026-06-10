@@ -37,28 +37,74 @@
       src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 
     <style>
-      .theme-toggle {
+      /* Top banner */
+      .top-banner {
         position: fixed;
-        top: 20px;
-        right: 20px;
+        top: 0;
+        left: 0;
+        right: 0;
         z-index: 1000;
-        background: var(--clr-buttons-main-bg);
-        border: 2px solid var(--clr-buttons-main-border);
-        border-radius: 50%;
-        width: 50px;
-        height: 50px;
-        cursor: pointer;
+        height: 56px;
+        background: var(--clr-bg);
+        border-bottom: 1px solid var(--clr-splitter-blockquote-and-section);
+        display: flex;
+        justify-content: center;
+      }
+
+      .banner-inner {
+        width: 1100px;
+        max-width: 100%;
+        box-sizing: border-box;
+        padding: 0 50px;
         display: flex;
         align-items: center;
-        justify-content: center;
-        font-size: 20px;
-        transition: all 0.3s ease;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        justify-content: space-between;
       }
-      
+
+      .banner-name {
+        font-size: 20px;
+        font-weight: 700;
+        color: var(--clr-h1-and-bold);
+        white-space: nowrap;
+      }
+
+      .banner-name:hover,
+      .banner-name:focus {
+        color: var(--clr-a-text-hvr);
+      }
+
+      .banner-nav {
+        display: flex;
+        align-items: center;
+        gap: 24px;
+      }
+
+      .banner-nav a {
+        font-size: 16px;
+        color: var(--clr-a-text);
+      }
+
+      /* Push page content below the fixed banner */
+      body {
+        padding-top: 80px;
+      }
+
+      /* Theme toggle now lives inside the banner */
+      .theme-toggle {
+        background: none;
+        border: none;
+        margin: 0;
+        padding: 0;
+        cursor: pointer;
+        font-size: 18px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        transition: transform 0.2s ease;
+      }
+
       .theme-toggle:hover {
-        transform: scale(1.1);
-        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        transform: scale(1.15);
       }
       
       .theme-toggle .sun-icon {
@@ -85,28 +131,34 @@
         display: block;
       }
       
-      @media (max-width: 768px) {
-        .theme-toggle {
-          top: 10px;
-          right: 10px;
-          width: 40px;
-          height: 40px;
-          font-size: 16px;
-        }
+      @media (max-width: 720px) {
+        .top-banner { height: 50px; }
+        .banner-inner { padding: 0 15px; }
+        .banner-name { font-size: 16px; }
+        .banner-nav { gap: 16px; }
+        .banner-nav a { font-size: 14px; }
+        body { padding-top: 66px; }
       }
     </style>
 
   </head>
   <body>
-    <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">
-      <span class="sun-icon">☀️</span>
-      <span class="moon-icon">🌙</span>
-    </button>
-    
+    <div class="top-banner">
+      <div class="banner-inner">
+        <a class="banner-name" href="{{ "/" | relative_url }}">{{ site.title | default: site.github.repository_name }}</a>
+        <nav class="banner-nav">
+          <a href="{{ "/" | relative_url }}">about</a>
+          <a href="{{ "/blogs/blogs.html" | relative_url }}">blogs</a>
+          <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">
+            <span class="sun-icon">☀️</span>
+            <span class="moon-icon">🌙</span>
+          </button>
+        </nav>
+      </div>
+    </div>
+
     <div class="wrapper">
       <header>
-        <h1><a href="{{ "/" | absolute_url }}">{{ site.title | default: site.github.repository_name }}</a></h1>
-        
         {% if site.logo %}
           <img src="{{site.logo | relative_url}}" alt="Logo" width=65% height=auto />
         {% endif %}
