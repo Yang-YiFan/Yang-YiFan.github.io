@@ -55,14 +55,14 @@
         width: 1100px;
         max-width: 100%;
         box-sizing: border-box;
-        padding: 0 50px;
+        padding: 0;
         display: flex;
         align-items: center;
         justify-content: space-between;
       }
 
       .banner-name {
-        font-size: 20px;
+        font-size: 24px;
         font-weight: 700;
         color: var(--clr-h1-and-bold);
         white-space: nowrap;
@@ -80,7 +80,7 @@
       }
 
       .banner-nav a {
-        font-size: 16px;
+        font-size: 18px;
         color: var(--clr-a-text);
       }
 
@@ -96,7 +96,7 @@
         margin: 0;
         padding: 0;
         cursor: pointer;
-        font-size: 18px;
+        font-size: 20px;
         line-height: 1;
         display: flex;
         align-items: center;
@@ -131,13 +131,23 @@
         display: block;
       }
       
+      /* In the theme's fluid layout (<=960px) the sidebar and content gain
+         the body's horizontal padding, so match it to keep the banner's
+         name/toggle aligned with the photo and main-text edges. */
+      @media (max-width: 960px) {
+        .banner-inner { padding: 0 50px; }
+      }
+
       @media (max-width: 720px) {
         .top-banner { height: 50px; }
-        .banner-inner { padding: 0 15px; }
-        .banner-name { font-size: 16px; }
+        .banner-name { font-size: 18px; }
         .banner-nav { gap: 16px; }
-        .banner-nav a { font-size: 14px; }
+        .banner-nav a { font-size: 16px; }
         body { padding-top: 66px; }
+      }
+
+      @media (max-width: 480px) {
+        .banner-inner { padding: 0 15px; }
       }
     </style>
 
