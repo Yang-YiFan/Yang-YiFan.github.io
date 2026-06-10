@@ -9,3 +9,15 @@ author:
   googlescholar: https://scholar.google.com/citations?user=J-9nKEYAAAAJ
   github:        Yang-YiFan
   linkedin:      yifan-yang-17a708155
+
+# Shared comments + emoji reactions on blog posts, backed by GitHub Discussions
+# via giscus (https://giscus.app). The comment box and reaction bar are hidden
+# until repo_id / category / category_id are filled in below.
+# To get these values: enable Discussions on the repo, install the giscus GitHub
+# App (https://github.com/apps/giscus), then visit https://giscus.app, enter the
+# repo, and copy the generated data-repo-id, data-category, data-category-id.
+giscus:
+  repo:        Yang-YiFan/Yang-YiFan.github.io
+  repo_id:     "MDEwOlJlcG9zaXRvcnkzNzI5NjQzNTc="
+  category:    "Announcements"
+  category_id: "DIC_kwDOFjr8Bc4C-4Mu"

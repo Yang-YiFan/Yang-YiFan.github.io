@@ -17,7 +17,6 @@
 {% seo %}
     <link rel="stylesheet" href="{{ "/assets/css/colors-ColorScheme.css?v=" | replace: "ColorScheme", ColorScheme | append: site.github.build_revision | relative_url }}">
     <link rel="stylesheet" href="{{ "/assets/css/style.css?v=" | append: site.github.build_revision | relative_url }}">
-    <link rel="stylesheet" href="{{ "/assets/css/reactions.css?v=" | append: site.github.build_revision | relative_url }}">
     <!--[if lt IE 9]>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv.min.js"></script>
     <![endif]-->
@@ -211,6 +210,34 @@
 
       {{ content }}
 
+      {% comment %}
+        Shared comments + emoji reactions, backed by GitHub Discussions via giscus.
+        Only shown on blog posts (not the homepage or the blog index) and only once
+        the giscus IDs are filled into _config.yml — otherwise this block renders
+        nothing, so the live site never shows a broken/unconfigured widget.
+      {% endcomment %}
+      {% assign g = site.giscus %}
+      {% if g.repo_id != "" and page.path contains 'blogs/' and page.name != 'blogs.md' %}
+      <div class="giscus-comments" style="margin-top: 3rem;">
+        <h2>💬 Comments &amp; Reactions</h2>
+        <script src="https://giscus.app/client.js"
+                data-repo="{{ g.repo }}"
+                data-repo-id="{{ g.repo_id }}"
+                data-category="{{ g.category }}"
+                data-category-id="{{ g.category_id }}"
+                data-mapping="pathname"
+                data-strict="0"
+                data-reactions-enabled="1"
+                data-emit-metadata="0"
+                data-input-position="bottom"
+                data-theme="preferred_color_scheme"
+                data-lang="en"
+                crossorigin="anonymous"
+                async>
+        </script>
+      </div>
+      {% endif %}
+
       </section>
       <footer>
         <script type='text/javascript' id='clustrmaps' src='//cdn.clustrmaps.com/map_v2.js?cl=ffffff&w=a&t=m&d=gXBk_PkE3yBSNgIn_ztsWevROB6f1nQsng1c5uadZS8'></script>
@@ -231,7 +258,28 @@
       function setTheme(theme) {
         document.documentElement.setAttribute('data-theme', theme);
         updateThemeColors(theme);
+        setGiscusTheme(theme);
       }
+
+      // Keep the giscus comments/reactions widget in sync with the site theme.
+      // No-ops if giscus isn't on the page or hasn't loaded its iframe yet.
+      function setGiscusTheme(theme) {
+        const iframe = document.querySelector('iframe.giscus-frame');
+        if (!iframe || !iframe.contentWindow) return;
+        iframe.contentWindow.postMessage(
+          { giscus: { setConfig: { theme: theme === 'dark' ? 'dark' : 'light' } } },
+          'https://giscus.app'
+        );
+      }
+
+      // giscus loads asynchronously; when it announces itself, re-apply the
+      // current theme so a manual toggle made before load still takes effect.
+      window.addEventListener('message', function (event) {
+        if (event.origin !== 'https://giscus.app') return;
+        if (!event.data || !event.data.giscus) return;
+        const current = document.documentElement.getAttribute('data-theme') || getSystemTheme();
+        setGiscusTheme(current);
+      });
       
       function updateThemeColors(theme) {
         const root = document.documentElement;
@@ -305,9 +353,6 @@
         // setTheme(systemTheme);
       });
     </script>
-    
-    <!-- Blog Reactions System -->
-    <script src="{{ "/assets/js/reactions.js?v=" | append: site.github.build_revision | relative_url }}"></script>
     
     {% if site.google_analytics %}
     <!-- Google tag (gtag.js) -->
