@@ -6,6 +6,8 @@ layout: default
 
 *Disclaimer: The content of this blog reflects my personal experiences and opinions while learning GPU programming in my own time. All information presented is publicly available and does not represent the views or positions of NVIDIA Corporation or any of its affiliates.*
 
+*中文翻译版见 [Tensor Core MMA Swizzle Layout 中文版](./mma_swizzle_cn.md).*
+
 ## 0. Introduction
 
 The tensor cores in Nvidia GPUs accelerate matrix multiplication operations. 
@@ -181,6 +183,7 @@ And the `8x16B` subtile is K-major.
 
 Confusingly, `swizzle none` is not the intuitive linear SMEM layout you would expect because it mandates the `M=8, K=8 K major` subtile to be stored contiguously in SMEM.
 We will explain this more with a concrete example in [Sec. 4](#4-why-swizzle).
+We will also explain the difference between TMA and MMA `Swizzle None` mode in [Sec. 9.1](#91-tma-swizzle-none).
 
 #### 3.1.2. K-Major Swizzle 32B
 
@@ -414,7 +417,7 @@ So they are both swizzle layout but with different atomicity/configuration.
 
 But the spirit is the same, take `K-major swizzle 64B` as an example, it allows bank conflict free access to both `2x64B` (needed for `st.shared` during GMEM->SMEM copy) and `8x16B` (needed for `ldmatrix.m8n8` during SMEM->RF copy) subtiles of a larger `8x64B` tile/atom.
 For matrix transpose, the swizzle layout allows bank conflict free access to a row (`1x128B`) or a column (`32x4B`) of the input matrix tile.
-Swizzle layout allows bank conflict free access to subtiles of two different shapes.
+**Swizzle layout allows bank conflict free access to subtiles of two different shapes.**
 
 You can read more about bank conflict free matrix transpose in [Lei Mao's blog](https://leimao.github.io/article/CuTe-Matrix-Transpose/) or [Colfax research's blog](https://research.colfax-intl.com/tutorial-matrix-transpose-in-cutlass/).
 
@@ -498,8 +501,11 @@ The `Swizzle None` SMEM layout TMA produces is incompatible with the `Swizzle No
 
 There are ways to fix this, i.e. we can create a specific TMA box size such that the `Swizzle None` mode of TMA and MMA are compatible.
 **The key is the width of the TMA box (the dimension where you have the swizzling, i.e. the major/contiguous dimension) should be exactly the same as 1 swizzle atom width. You can extend the TMA box height however you want (multiple of 8).**
-Another way to put this is you can stack many swizzle atoms on top of each other vertically (for K major layout) to form the TMA box.
-But you can't stack more than 1 swizzle atom horizontally (for K major layout) to form the TMA box.
+
+Another way to put this is if you are using K major layout, you can stack many swizzle atoms on top of each other vertically (M dimension) to form the TMA box.
+But you can't stack more than 1 swizzle atom horizontally (K dimension) to form the TMA box.
+If you are using M major layout, you can stack many swizzle atoms on top of each other along K dimension to form the TMA box.
+But you can't stack more than 1 swizzle atom along M dimension to form the TMA box.
 
 The last row of the figure shows the correct TMA box size that makes the `Swizzle None` mode of TMA and MMA compatible.
 Basically we create a TMA box of size `8x16B` (exactly 1 `Swizzle None` atom).
@@ -534,7 +540,7 @@ Reinforcing the idea again, the TMA box can be arbitrarily high (e.g. `16x32B` o
 Other swizzle layouts (64B and 128B) follow the exact same usage pattern.
 
 This is exactly why if you have a `64x256B` tile, and you use `Swizzle 128B` layout, inspecting the ptx/SASS instruction you will see 2 TMA load instructions rather than 1.
-Because CuTe will create the maximum TMA box size of `64x128B` and break the tile into 2 TMA boxes.
+Because CuTe will create the maximum TMA box size of `64x128B` (based on the tile size and swizzle layout) and break the tile into 2 TMA boxes.
 Then we issue 2 TMA load instructions to load the tile into SMEM with MMA compatible swizzled layout.
 
 ### 9.3. Putting it all together
@@ -557,7 +563,7 @@ Given the end SMEM layout we want, we can't have a taller TMA box (e.g. `16x32B`
 We also can't have a wider TMA box because the layout would be incompatible with what the tensor core expects.
 Hence we have 16 TMA boxes for the `64x64B` tile and generates 32B GMEM read requests.
 The blue box on the top right corner shows the swizzle atom needed by a single `tcgen05.mma` instruction.
-MMA 0 needs atom 0, 2, 4, 6... and MMA 1 needs atom 1, 3, 5, 7...
+MMA 0 needs atom 0, 2, 4, 6... (all grey atoms) and MMA 1 needs atom 1, 3, 5, 7... (all pink atoms).
 The layout of MMA 0's input operand (atom 0, 2, 4, 6... (`64x32B` subtile)) can be described as a [Blackwell mma matrix descriptor](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-matrix-descriptors) and CuTe can build it for you automatically.
 In my [Blackwell MMA SMEM Descriptor blog](../smem_descriptor/smem_descriptor.md), we cover how CuTe builds the SMEM descriptor for Blackwell MMA in more details.
 
@@ -567,7 +573,7 @@ We can have a TMA box size of `64x32B` (which includes atom 0, 2, 4, 6, 8, 10, 1
 After the TMA transfer, atom 0, 2, 4, 6, 8, 10, 12, 14 will be contiguously in SMEM, exactly what we specified!
 Now the `64x64B` tile simply contains 2 `64x32B` TMA boxes and we issue only 2 (instead of 16 in the row-major case) TMA load instructions to load the tile into SMEM with 32B GMEM read requests.
 The blue box on the bottom right corner shows the swizzle atom needed by a single `tcgen05.mma` instruction.
-MMA 0 needs atom 0, 2, 4, 6... and MMA 1 needs atom 1, 3, 5, 7...
+MMA 0 needs atom 0, 2, 4, 6... (all grey atoms) and MMA 1 needs atom 1, 3, 5, 7... (all pink atoms).
 The layout of MMA 0's input operand (atom 0, 2, 4, 6... (`64x32B` subtile)) can also be described as a [Blackwell mma matrix descriptor](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-matrix-descriptors).
 Note that the only layout difference of these two subtiles is the stride between two swizzle atoms, and this is exactly what [Stride Dimension Byte Offset](https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-stride-dimension-byte-offset) specifies.
 
@@ -579,6 +585,7 @@ But both layouts will yield the correct result.
 In this blog I covered mostly what you need to know about mma swizzle layout:
 - The 8 legal mma swizzle layouts and their specifications.
 - Swizzle layout makes sure when the tile is copied from GMEM to SMEM and read out from SMEM (`8x16B` or `16x8B`), there is no SMEM bank conflicts.
+- Swizzle layout allows bank conflict free access to subtiles (within a larger tile) of two different shapes.
 - Swizzling doesn't change the major-ness of the input tile when loading from GMEM to SMEM, it only changes how the 16B chunk are laid out in SMEM.
 - Maximizing swizzle atom size improves GMEM access efficiency (longer contiguous loads).
 - Transpose happens during SMEM->RF copy of `ldmatrix` and is not handled by swizzle layout.

@@ -17,7 +17,7 @@ I plan to write blogs during my process of learning CUDA/Cutlass/CuTe/Triton pro
 - ### [[New] Blackwell MMA SMEM Descriptor](./blogs/smem_descriptor/smem_descriptor.md)
 - ### [4 Ways to Do CuTe Copy](./blogs/cute_copy/cute_copy.md)
 - ### [GPU Memory Consistency Model](./blogs/memory_model/memory_model.md)
-- ### [Tensor Core MMA Swizzle Layout](./blogs/mma_swizzle/mma_swizzle.md)
+- ### [Tensor Core MMA Swizzle Layout](./blogs/mma_swizzle/mma_swizzle.md) [[中文版]](./blogs/mma_swizzle/mma_swizzle_cn.md)
 - ### [Using Programmatic Dependent Launch (PDL) to Reduce End-to-End Latency](./blogs/pdl/pdl.md)
 - ### [CuTe Layout and Tensor](./blogs/cute_layout/cute_layout.md)
 - ### [How to Make a Compute-bound Problem Actually Compute-bound](./blogs/reg_tile/reg_tile.md)
