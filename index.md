@@ -71,6 +71,7 @@ Algorithm-hardware co-design for ConvNet accelerators on embedded FPGAs
 
 # Services
 
+- Lightweight PC, ISCA 2026
 - Light load PC, HPCA 2026
 - Selection Committee Member, MICRO 2024 Student Research Competition
 - Artifact Evaluation Committee Member, ASPLOS 2022, 2023

@@ -6,7 +6,7 @@ layout: default
 
 *Disclaimer: The content of this blog reflects my personal experiences and opinions while learning GPU programming in my own time. All information presented is publicly available and does not represent the views or positions of NVIDIA Corporation or any of its affiliates.*
 
-*中文翻译版见 [Using Programmatic Dependent Launch (PDL) to Reduce End-to-End Latency 中文版](./pdl_cn.md).*
+*中文翻译版见 [使用 Programmatic Dependent Launch (PDL) 降低端到端延迟 中文版](./pdl_cn.md).*
 
 ## 0. Introduction
 
