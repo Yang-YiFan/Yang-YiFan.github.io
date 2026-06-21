@@ -8,6 +8,8 @@ layout: default
 
 *Disclaimer2: This blog is written in collaboration with Claude. I have supervised every word of it. So the probability of this blog being AI slop is low.*
 
+*中文翻译版见 [Blackwell MMA SMEM Descriptor 中文版](./smem_descriptor_cn.md).*
+
 ## 0. Introduction
 
 In my previous blog ([MMA Swizzle Layout](../mma_swizzle/mma_swizzle.md)) I covered the SMEM swizzle layouts the Blackwell tensor core expects.

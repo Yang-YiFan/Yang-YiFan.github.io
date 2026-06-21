@@ -6,6 +6,8 @@ layout: default
 
 *Disclaimer: The content of this blog reflects my personal experiences and opinions while learning GPU programming in my own time. All information presented is publicly available and does not represent the views or positions of NVIDIA Corporation or any of its affiliates.*
 
+*中文翻译版见 [Using Programmatic Dependent Launch (PDL) to Reduce End-to-End Latency 中文版](./pdl_cn.md).*
+
 ## 0. Introduction
 
 There are many ways to reduce the end-to-end latency of neural network computation (training/inference/etc.). Some of the notable ones are:
@@ -30,7 +32,7 @@ The figure below shows an example where PDL is beneficial in reducing the end-to
 
 ![PDL Example](./pdl_example.png)
 
-Suppose we have two dependent fully connected layers, FC1 and FC2. And the output activation of FC1 (`y`) is the input activation of FC2 (`z`). We run them in the same stream.
+Suppose we have two dependent fully connected layers, FC1 and FC2. And the output activation of FC1 (`y`) is the input activation of FC2. We run them in the same stream.
 
 ```python
 y = W1 * x # FC1
@@ -138,8 +140,8 @@ In order for the PDL kernel overlap to be functional, the following conditions n
 3. The SM has enough resources to run both kernels concurrently. For instance, the combined smem usage of the two kernels should be less than the SM's smem capacity. Similar resource constraints apply to register, number of threads, number of warps, tmem, etc. If this condition is not met, the two kernels will just be executed serially.
 4. (Optionally but recommended) The previous kernel has `griddepcontrol.launch_dependents` placed in the middle of the kernel to allow overlapping with the current kernel's prolog. Even if there is no `griddepcontrol.launch_dependents` in the previous kernel, as long as the first three conditions are met, the PDL overlap will still happen. PDL will assumes `griddepcontrol.launch_dependents` is inserted at the end of the previous kernel, so that the grid-ending membar of the previous kernel is still overlapped with the current kernel's launch time and prolog.
 
-Therefore, the placement of `griddepcontrol.wait` affects both performance and correctness.
-The placement of `griddepcontrol.launch_dependents` affects only the performance.
+Therefore, **the placement of `griddepcontrol.wait` affects both performance and correctness.**
+**The placement of `griddepcontrol.launch_dependents` affects only the performance.**
 
 ### 2.2 Profiler Support
 
@@ -158,7 +160,7 @@ Yes, indeed it's similar on that aspect.
 But the most important distinction in my opinion is how the two dependent kernels synchronize with each other. 
 
 - Baseline single stream launch without PDL: this is full hardware synchronization. The hardware issues grid-ending membar to make sure FC1's output is visible in global memory. And then the hardware launches FC2. The hardware blocks the launch of FC2 to ensure correctness.
-- PDL: this is hardware-assisted software synchronization. The hardware still issues grid-ending membar to make sure FC1's output is visible in global memory. But now the software determines where in FC2 is blocked by placing `griddepcontrol.wait` correctly. The hardware unblocks `griddepcontrol.wait` in FC2 when FC1's grid-ending membar completes.
+- PDL: this is software-assisted hardware synchronization. The hardware still issues grid-ending membar to make sure FC1's output is visible in global memory. But now the software determines where in FC2 is blocked by placing `griddepcontrol.wait` correctly. The hardware unblocks `griddepcontrol.wait` in FC2 when FC1's grid-ending membar completes.
 - Megakernel: this is software-only synchronization. I'll describe one plausible implementation. The software issues membar at the end of FC1. The software also blocks FC2's execution by doing wait on an L2 atomics. FC1 notifies FC2 that its output is ready (membar completed) by doing atomics on the same L2 atomics in software, to unblock FC2.
 
 All these approaches are a trade-off between lower latency and flexibility. The hardware synchronization is the most efficient but least flexible. The software synchronization is the most flexible but least efficient. 
